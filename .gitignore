@@ -23,3 +23,7 @@ parts/
 venv/
 .vscode/
 .idea/
+
+# validation artefacts we do commit
+!val/*.jsonl
+val/ref_frames/

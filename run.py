@@ -1,0 +1,43 @@
+"""Video indexing at speed: per-second YOLO11l object presence and people counts for FineVideo parquet files.
+
+    python run.py --input <folder of .parquet files> --output results.jsonl
+
+See README.md. Runs fully offline: the weights must already be in weights/yolo11l.pt (python prepare.py).
+"""
+import argparse
+import os
+import sys
+import time
+
+os.environ.setdefault("YOLO_OFFLINE", "1")          # Ultralytics: no network checks
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--input", required=True, help="folder with .parquet files (mp4 column)")
+    ap.add_argument("--output", required=True, help="output JSON Lines file")
+    ap.add_argument("--weights", default=os.path.join(HERE, "weights", "yolo11l.pt"))
+    ap.add_argument("--samples-per-second", "-k", type=int, default=3,
+                    help="frames sampled per second of video (0 = every frame)")
+    ap.add_argument("--workers", type=int, default=None, help="decode processes (default: CPU threads - 1)")
+    ap.add_argument("--batch", type=int, default=None, help="GPU batch size (default: auto)")
+    ap.add_argument("--fp32", action="store_true", help="force FP32 inference")
+    ap.add_argument("--fp16", action="store_true", help="force FP16 inference")
+    a = ap.parse_args()
+
+    from vindex.pipeline import run
+
+    half = True if a.fp16 else (False if a.fp32 else None)
+    t0 = time.time()
+    res = run(a.input, a.output, a.weights, k=a.samples_per_second, workers=a.workers, batch=a.batch,
+              half=half, log=lambda s: print(s, file=sys.stderr, flush=True))
+    print(f"wrote {res['lines']} lines for {res['videos']} videos in {time.time() - t0:.1f} s", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
