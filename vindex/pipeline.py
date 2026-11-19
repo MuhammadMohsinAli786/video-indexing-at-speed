@@ -29,8 +29,13 @@ HANG_SECONDS = float(os.environ.get("VINDEX_HANG_SECONDS", "600"))  # silent wor
 def list_parquets(folder):
     if not os.path.isdir(folder):
         raise SystemExit(f"input folder not found: {folder}")
-    return sorted(os.path.join(folder, f) for f in os.listdir(folder)
-                  if f.lower().endswith(".parquet") and os.path.isfile(os.path.join(folder, f)))
+    files = sorted(os.path.join(folder, f) for f in os.listdir(folder)
+                   if f.lower().endswith(".parquet") and os.path.isfile(os.path.join(folder, f)))
+    if not files:  # tolerate a folder that only holds the files in sub-folders
+        for root, _, names in os.walk(folder):
+            files += [os.path.join(root, f) for f in names if f.lower().endswith(".parquet")]
+        files.sort()
+    return files
 
 
 def reader_thread(files, task_q, err_lines, n_workers, stop, only=None):
