@@ -99,8 +99,12 @@ class Detector:
             y = y[0]
         return y  # (B, 4 + 80, N)
 
-    def postprocess(self, pred):
-        """Ultralytics non_max_suppression restricted to our classes, batched. Returns (present, people)."""
+    def postprocess(self, pred, conf_thres=CONF, return_dets=False):
+        """Ultralytics non_max_suppression restricted to our classes, batched. Returns (present, people).
+
+        With return_dets, also returns per image the kept detections [(object_index, conf)] with
+        conf >= conf_thres (present/people still count only conf >= CONF).
+        """
         torch = self.torch
         import torchvision
 
@@ -108,11 +112,11 @@ class Detector:
         B = pred.shape[0]
         scores_all = pred[:, 4:84, :]  # (B, 80, N)
         conf, j = scores_all.max(1)  # best class per box (B, N)
-        keep = (conf >= CONF) & (self.lut[j] >= 0)
+        keep = (conf >= conf_thres) & (self.lut[j] >= 0)
         present = torch.zeros((B, len(CLASS_IDS)), dtype=torch.bool, device=pred.device)
         people = torch.zeros((B,), dtype=torch.long, device=pred.device)
         if not bool(keep.any()):
-            return present, people
+            return (present, people, [[] for _ in range(B)]) if return_dets else (present, people)
         b_idx, n_idx = keep.nonzero(as_tuple=True)
         xywh = pred[b_idx, 0:4, n_idx]  # (M, 4)
         xy, wh = xywh[:, :2], xywh[:, 2:] / 2
@@ -122,7 +126,7 @@ class Detector:
         c = cls.float().unsqueeze(1) * MAX_WH  # class offset, float32 like Ultralytics
         boxes = (xyxy + c).double() + b_idx.double().unsqueeze(1) * float(2 ** 23)  # per-image offset, exact
         k = torchvision.ops.nms(boxes, sc.double(), IOU)  # indices sorted by score, descending
-        kb, kc = b_idx[k], self.lut[cls[k]]
+        kb, kc, ks = b_idx[k], self.lut[cls[k]], sc[k]
         counts = torch.bincount(kb, minlength=B)
         if int(counts.max()) > MAX_DET:  # rare: apply max_det per image (keep the top-scoring 300)
             order = torch.argsort(kb, stable=True)  # group by image, scores stay descending inside
@@ -130,12 +134,19 @@ class Detector:
             first = torch.cumsum(counts, 0) - counts
             rank = torch.arange(kb_s.numel(), device=kb.device) - first[kb_s]
             ok = rank < MAX_DET
-            kb, kc = kb_s[ok], kc[order][ok]
+            kb, kc, ks = kb_s[ok], kc[order][ok], ks[order][ok]
+        dets = None
+        if return_dets:
+            dets = [[] for _ in range(B)]
+            for b, c_, s_ in zip(kb.tolist(), kc.tolist(), ks.tolist()):
+                dets[b].append((c_, round(s_, 4)))
+        strong = ks >= CONF
+        kb, kc = kb[strong], kc[strong]
         present[kb, kc] = True
         people = torch.bincount(kb[kc == 0], minlength=B)
-        return present, people
+        return (present, people, dets) if return_dets else (present, people)
 
-    def detect(self, batch):
+    def detect(self, batch, conf_thres=CONF, return_dets=False):
         with self.torch.inference_mode():
             x = self.preprocess(batch)
-            return self.postprocess(self.raw(x))
+            return self.postprocess(self.raw(x), conf_thres, return_dets)

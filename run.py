@@ -28,14 +28,19 @@ def main():
     ap.add_argument("--batch", type=int, default=None, help="GPU batch size (default: auto)")
     ap.add_argument("--fp32", action="store_true", help="force FP32 inference")
     ap.add_argument("--fp16", action="store_true", help="force FP16 inference")
+    ap.add_argument("--videos", help=argparse.SUPPRESS)  # dev: file with 'name.parquet:row' ids to process
+    ap.add_argument("--dump-dets", help=argparse.SUPPRESS)  # dev: per-frame detections (conf>=0.25) dir
     a = ap.parse_args()
+    only = None
+    if a.videos:
+        only = {l.strip() for l in open(a.videos, encoding="utf-8") if l.strip() and not l.startswith("#")}
 
     from vindex.pipeline import run
 
     half = True if a.fp16 else (False if a.fp32 else None)
     t0 = time.time()
     res = run(a.input, a.output, a.weights, k=a.samples_per_second, workers=a.workers, batch=a.batch,
-              half=half, log=lambda s: print(s, file=sys.stderr, flush=True))
+              half=half, log=lambda s: print(s, file=sys.stderr, flush=True), only=only, dump_dir=a.dump_dets)
     print(f"wrote {res['lines']} lines for {res['videos']} videos in {time.time() - t0:.1f} s", file=sys.stderr)
 
 

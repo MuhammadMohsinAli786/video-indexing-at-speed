@@ -10,7 +10,7 @@ For each video:
 
 Messages to the main process (one queue):
   ("start", wid, vid)
-  ("f", wid, vid, second, slot, H, W)          a letterboxed frame is in `slot`
+  ("f", wid, vid, second, slot, H, W, pts)     a letterboxed frame is in `slot`
   ("done", wid, vid, n_seconds, error_or_None)
 """
 import math
@@ -73,8 +73,8 @@ def process_video(vid, data, k, get_slot, slots, send, wid, threads=1, deadline=
             img = to_bgr(fr)
             H, W = letterbox_shape(img.shape[0], img.shape[1])
             slot = get_slot()
-            letterbox_into(img, slots[slot])
-            send(("f", wid, vid, s, slot, H, W))
+            letterbox_into(img, slots[slot][: H * W * 3].reshape(H, W, 3))
+            send(("f", wid, vid, s, slot, H, W, fr.pts))
 
         for fr in c.decode(vs):
             t = clock.time(fr)
@@ -88,7 +88,7 @@ def process_video(vid, data, k, get_slot, slots, send, wid, threads=1, deadline=
                 if cur_s is not None and not cur_sampled and cur_last is not None:
                     emit(cur_last, cur_s)
                 cur_s, cur_sampled, cur_last = s, False, None
-            if fr.pts in chosen:
+            if k <= 0 or fr.pts in chosen:  # k <= 0: every decoded frame (reference mode)
                 emit(fr, s)
                 cur_sampled = True
                 cur_last = None
@@ -111,7 +111,20 @@ def process_video(vid, data, k, get_slot, slots, send, wid, threads=1, deadline=
     return n_seconds, err
 
 
-def worker_main(wid, task_q, msg_q, free_q, shm_name, n_slots, k, threads, max_seconds_per_video):
+CUR_BYTES = 512  # per-worker record of the video being processed (survives a hard crash)
+
+
+def set_current(cur, wid, vid):
+    b = (vid or "").encode("utf-8")[: CUR_BYTES - 1]
+    cur[wid * CUR_BYTES: wid * CUR_BYTES + len(b) + 1] = b + b"\x00"
+
+
+def get_current(cur, wid):
+    raw = bytes(cur[wid * CUR_BYTES: (wid + 1) * CUR_BYTES])
+    return raw.split(b"\x00", 1)[0].decode("utf-8", "ignore") or None
+
+
+def worker_main(wid, task_q, msg_q, free_q, shm_name, n_slots, k, threads, max_seconds_per_video, cur):
     """Entry point of a decode worker process."""
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     import cv2
@@ -119,7 +132,7 @@ def worker_main(wid, task_q, msg_q, free_q, shm_name, n_slots, k, threads, max_s
 
     cv2.setNumThreads(1)
     shm = shared_memory.SharedMemory(name=shm_name)
-    slots = np.ndarray((n_slots, 640, 640, 3), dtype=np.uint8, buffer=shm.buf)
+    slots = np.ndarray((n_slots, SLOT_BYTES), dtype=np.uint8, buffer=shm.buf)  # frame (H, W, 3) stored contiguously
 
     def get_slot():
         return free_q.get()
@@ -130,7 +143,12 @@ def worker_main(wid, task_q, msg_q, free_q, shm_name, n_slots, k, threads, max_s
             if task is None:
                 break
             vid, data = task
+            set_current(cur, wid, vid)
             msg_q.put(("start", wid, vid))
+            if vid == os.environ.get("VINDEX_TEST_CRASH"):  # test hook: simulate a hard crash in FFmpeg
+                os._exit(3)
+            if vid == os.environ.get("VINDEX_TEST_HANG"):  # test hook: simulate a hang
+                time.sleep(10 ** 6)
             try:
                 deadline = time.monotonic() + max_seconds_per_video if max_seconds_per_video else None
                 n, err = process_video(vid, data, k, get_slot, slots, msg_q.put, wid, threads, deadline)
@@ -138,6 +156,7 @@ def worker_main(wid, task_q, msg_q, free_q, shm_name, n_slots, k, threads, max_s
                 n, err = 0, f"internal error: {type(e).__name__}: {e} | {traceback.format_exc(limit=2)[-300:]}"
             del data, task
             msg_q.put(("done", wid, vid, n, err))
+            set_current(cur, wid, None)
     finally:
         del slots
         shm.close()
