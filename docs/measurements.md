@@ -47,3 +47,27 @@ Facts and numbers only. Each entry has a date (PKT). Used by the candidate to wr
 - 2026-11-19, end-to-end reference cross-check: `tools/reference.py` (decode + Ultralytics `YOLO.predict` on every frame + per-second rule) vs `run.py --k1 0` (every frame through our pipeline) on 3 short tuning videos (`val/crosscheck_videos.txt`, 2108 frames, 72 seconds): F1 1.0000, people exact 100%, within-1 100% (identical lines). The bulk references below therefore use `run.py --k1 0`.
 - 2026-11-19, interruption test: edge suite run killed after 75 s (9 of 24 videos in the done-file), resumed with `tools/resume_list.py` + `run.py --videos`, merged with `tools/merge_parts.py`: merged output identical to an uninterrupted run. First version of the resume check used "seconds 0..last contiguous" to call a video complete, which cannot detect a video torn in the middle of writing; replaced by `--done-file` (a video id is appended only after its lines are flushed and fsynced).
 - 2026-11-19, Google Colab attempt (free tier, `tools/colab_full_run.ipynb` opened from GitHub): runtime was a Tesla T4 15 GB, driver 580.82.07, Intel Xeon @ 2.00 GHz with 2 vCPUs (1 core, 2 threads), 12 GB RAM, Python 3.13.16. `pip install -r requirements.txt` succeeded on this Linux VM (first real Linux install test) and `prepare.py`'s self-test passed in FP16 on the T4 (bus.jpg 4 people, zidane.jpg 2 people, identical to Ultralytics predict). The run stopped at the Hugging Face token prompt: entering the token into the Colab page by automation was not permitted in this session, and the user was away, so the full run stays on the local machine (one machine for the whole run).
+
+## Sampling study (tuning set: 35 videos from files 02-09, 5395 s, 146,763 frames)
+
+Every-frame reference = `run.py --k1 0` (identical to Ultralytics predict, see above), per-frame detections dumped.
+Strategies replayed offline with `tools/simulate.py` (the pipeline's own adaptive output was checked to be identical
+to the simulator's: 539 s, F1 1.0000, exact 100%). Metrics vs the every-frame reference:
+
+| strategy | frames analysed per second of video | % of all frames | objects F1 | people exact | people within 1 |
+|---|---|---|---|---|---|
+| uniform k=1 (middle frame) | 1.00 | 3.7 | 0.9781 | 92.90% | 99.41% |
+| uniform k=2 | 2.00 | 7.3 | 0.9673 | 90.88% | 99.26% |
+| uniform k=3 | 3.00 | 11.0 | 0.9880 | 95.59% | 99.87% |
+| uniform k=5 | 5.00 | 18.4 | 0.9918 | 96.77% | 99.91% |
+| adaptive 1->3, band [0.3,0.5), neighbours off | 1.39 | 5.1 | 0.9829 | 94.81% | 99.78% |
+| adaptive 1->3, band [0.3,0.5), neighbours objects | 1.73 | 6.4 | 0.9878 | 95.40% | 99.83% |
+| **adaptive 1->3, band [0.25,0.6), neighbours objects (chosen)** | **1.82** | **6.7** | **0.9879** | **95.44%** | **99.85%** |
+| adaptive 1->3, band [0.25,0.6), neighbours objects+people | 1.88 | 6.9 | 0.9879 | 95.55% | 99.87% |
+| adaptive 1->5, band [0.3,0.55), neighbours objects | 2.51 | 9.2 | 0.9909 | 96.52% | 99.87% |
+
+Full grid: 4 (k1,k2) x 4 bands x 3 neighbour modes, output kept in the run log. Observations (facts):
+- k=2 is worse than k=1 (the ">= half" rule makes an object present when seen in 1 of 2 samples).
+- F1 levels off near 0.99 even at k=5 (objects present in about half of a second's frames).
+- Chosen setting: same accuracy as uniform k=3 with 39% fewer frames; the wider band was kept over [0.3,0.5) (5% fewer frames, same accuracy) as the more conservative choice for unseen data.
+- Per object (22-video interim check, chosen setting): person 0.989, car 0.973, dog 1.000, laptop 0.965, cell phone 0.972; worst single video F1 0.962, worst single-video people exact 85.2%.
