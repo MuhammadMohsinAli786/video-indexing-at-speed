@@ -111,16 +111,21 @@ def video_lines(vid, samples, n_seconds):
     return lines
 
 
-class GPURunner(threading.Thread):
-    """Runs detector batches from `jobs` and puts results on `results` (one thread owns the GPU)."""
+class GPURunner:
+    """Inference threads: each takes a batch from `jobs`, runs model + NMS on its own CUDA stream and puts the
+    result on `results`. Two threads keep the GPU busy while the other one waits on NMS / copies."""
 
-    def __init__(self, det, batch, n_bufs, dump, band):
-        super().__init__(daemon=True)
+    def __init__(self, dets, batch, dump, band):
+        """dets: one Detector per thread (the Ultralytics head caches anchors per input shape: not thread-safe)."""
         import torch
 
-        self.det, self.dump, self.band = det, dump, band
-        pin = det.device.type == "cuda"
-        self.bufs = [torch.empty(batch * SLOT_BYTES, dtype=torch.uint8, pin_memory=pin) for _ in range(n_bufs)]
+        self.torch = torch
+        det = dets[0]
+        n_threads = len(dets)
+        self.dump, self.band = dump, band
+        cuda = det.device.type == "cuda"
+        n_bufs = 2 * n_threads + 1
+        self.bufs = [torch.empty(batch * SLOT_BYTES, dtype=torch.uint8, pin_memory=cuda) for _ in range(n_bufs)]
         self.np_bufs = [b.numpy() for b in self.bufs]
         self.free = queue.Queue()
         for i in range(n_bufs):
@@ -128,30 +133,42 @@ class GPURunner(threading.Thread):
         self.jobs = queue.Queue()
         self.results = queue.Queue()
         self.busy_seconds = 0.0
+        self.threads = [threading.Thread(target=self._loop, args=(d, torch.cuda.Stream(det.device) if cuda else None),
+                                         daemon=True) for d in dets]
+        for t in self.threads:
+            t.start()
 
-    def run(self):
-        while True:
-            job = self.jobs.get()
-            if job is None:
-                break
-            items, H, W, bi = job
-            n = len(items)
-            t0 = time.perf_counter()
-            try:
-                x = self.bufs[bi][: n * H * W * 3].view(n, H, W, 3)
-                band = (0.25, 0.25) if self.dump and not self.band else self.band
-                present, people, unsure, dets = self.det.detect(x, band=band, return_dets=self.dump)
-                out = (items, present.cpu().numpy(), people.cpu().numpy(),
-                       None if unsure is None else unsure.cpu().numpy(), dets, None)
-            except Exception as e:  # e.g. CUDA OOM on an odd batch: report, keep going
-                out = (items, None, None, None, None, f"{type(e).__name__}: {e}")
-            self.busy_seconds += time.perf_counter() - t0
-            self.free.put(bi)
-            self.results.put(out)
+    def stop(self):
+        for _ in self.threads:
+            self.jobs.put(None)
+
+    def _loop(self, det, stream):
+        import contextlib
+
+        ctx = self.torch.cuda.stream(stream) if stream is not None else contextlib.nullcontext()
+        with ctx:
+            while True:
+                job = self.jobs.get()
+                if job is None:
+                    break
+                items, H, W, bi = job
+                n = len(items)
+                t0 = time.perf_counter()
+                try:
+                    x = self.bufs[bi][: n * H * W * 3].view(n, H, W, 3)
+                    band = (0.25, 0.25) if self.dump and not self.band else self.band
+                    present, people, unsure, dets = det.detect(x, band=band, return_dets=self.dump)
+                    out = (items, present.cpu().numpy(), people.cpu().numpy(),
+                           None if unsure is None else unsure.cpu().numpy(), dets, None)
+                except Exception as e:  # e.g. CUDA OOM on an odd batch: report, keep going
+                    out = (items, None, None, None, None, f"{type(e).__name__}: {e}")
+                self.busy_seconds += time.perf_counter() - t0
+                self.free.put(bi)
+                self.results.put(out)
 
 
 def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_slots=None, half=None,
-        threads_per_worker=1, log=print, only=None, dump_dir=None):
+        threads_per_worker=1, log=print, only=None, dump_dir=None, gpu_threads=None):
     sampling = sampling or Sampling()
     t_start = time.time()
     files = list_parquets(input_dir)
@@ -165,15 +182,19 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
     from .detector import Detector
 
     det = Detector(weights, "cuda:0" if torch.cuda.is_available() else "cpu", half=half)
+    gpu_mem = torch.cuda.get_device_properties(det.device).total_memory if det.device.type == "cuda" else 0
+    if gpu_threads is None:  # a second inference thread hides NMS/copy gaps; needs memory for two batches
+        gpu_threads = 2 if gpu_mem >= 8 * 2 ** 30 else 1
     if batch is None:
-        batch = auto_batch(det)
+        batch = auto_batch(det, 64 if gpu_mem >= 12 * 2 ** 30 else 16)
     cpu = os.cpu_count() or 4
     if workers is None:
         workers = max(1, min(cpu - 1, 48))
     if n_slots is None:
         n_slots = max(6 * batch, 4 * workers, 64)
     log(f"device={det.device} ({torch.cuda.get_device_name(0) if det.device.type == 'cuda' else 'cpu'}) "
-        f"half={det.half} batch={batch} workers={workers} slots={n_slots} sampling: {sampling.describe()} "
+        f"half={det.half} batch={batch} gpu_threads={gpu_threads} workers={workers} slots={n_slots} "
+        f"sampling: {sampling.describe()} "
         f"startup={time.time() - t_start:.1f}s")
 
     ctx = mp.get_context("spawn")
@@ -200,8 +221,8 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
     procs = {wid: start_worker(wid) for wid in range(workers)}
     rt = threading.Thread(target=reader_thread, args=(files, task_q, err_lines, workers, stop, only), daemon=True)
     rt.start()
-    gpu = GPURunner(det, batch, 3, bool(dump_dir), sampling.band if sampling.adaptive else None)
-    gpu.start()
+    dets = [det] + [Detector(weights, det.device, half=det.half) for _ in range(max(1, gpu_threads) - 1)]
+    gpu = GPURunner(dets, batch, bool(dump_dir), sampling.band if sampling.adaptive else None)
 
     samples = defaultdict(lambda: defaultdict(list))  # vid -> second -> [(present, people)]
     dumps = defaultdict(list)  # vid -> [(pts, second, dets)] when dump_dir is set
@@ -367,7 +388,7 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
                     if inflight[vid] == 0:
                         finish(vid)
         else:
-            if pending and gpu.jobs.qsize() == 0:
+            if pending and gpu.jobs.qsize() == 0 and gpu.free.qsize() > 0:
                 flush_largest()  # GPU idle and no new frames: run what we have
             now = time.monotonic()
             for wid, p in list(procs.items()):
@@ -410,7 +431,7 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
         n_err += 1
     writer.close()
     stop.set()
-    gpu.jobs.put(None)
+    gpu.stop()
     for p in procs.values():
         p.join(timeout=5)
         if p.is_alive():
