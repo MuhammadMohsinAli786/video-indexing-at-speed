@@ -1,49 +1,35 @@
 # Resume notes (work in progress; delete before the final submission)
 
-State as of 2026-11-19 evening. Environment: venv `D:\vi-tools\venv` (Python 3.11.9, torch 2.14.1+cu126).
-Data: `D:\video-indexing\finevideo\data` (50 files, verified). Weights: `D:\video-indexing\weights\yolo11l.pt`.
+Environment: venv `D:\vi-tools\venv` (Python 3.11.9, torch 2.14.1+cu126). Data: `D:\video-indexing\finevideo\data`
+(50 files, sizes verified). Weights: `D:\video-indexing\weights\yolo11l.pt`. Run parts: `D:\vi-tools\fullrun\`.
 
-## Automated chain (started 2026-11-19 ~17:00)
+## Full 50-file run: state (2026-11-19 evening)
 
-`D:\vi-tools\after_refs.sh` waits for the held-out reference (`val/ref_heldout.jsonl`), then runs the final
-settings on held-out (FP32 + FP16) and on the tuning set, scores them into `D:\vi-tools\logs\after_refs.log`,
-and starts the full run (`D:\vi-tools\fullrun\part1.jsonl` + `.done`, log `part1.log`) if held-out FP32 keeps
-F1 >= 0.98, exact >= 92%, within-1 >= 98%. Check `after_refs.log` first.
+| part | how started | start (PKT) | end | notes |
+|---|---|---|---|---|
+| (aborted) | after_refs.sh | 18:19:33 | ~18:25 | CUDA OOM bug, discarded, kept in `fullrun/aborted_oom/` |
+| part1 | `D:\vi-tools\fullrun_go.sh part1` | 18:32:39 | ~18:39 (killed, 371 s logged) | Claude Code restart killed it; 9 videos in `part1.jsonl.done` |
+| part2 | `D:\vi-tools\fullrun_part2.cmd`, detached via WMI | 18:41:55 | see `part2.times` | resumes the other 1641 videos (`todo2.txt`) |
 
-## Full 50-file run (resumable)
+Each part writes `partN.jsonl`, `partN.jsonl.done` (videos fully written), `partN.log`, `partN.times`.
 
-Run parts go to `D:\vi-tools\fullrun\` (outside the repo). Each part has a `.done` list of finished videos.
+## If part2 is interrupted too
 
-Start (first part):
+Launch the next part DETACHED (not as a child of a Claude shell), e.g. a `fullrun_part3.cmd` like part2's with
+`--done D:/vi-tools/fullrun/part1.jsonl D:/vi-tools/fullrun/part2.jsonl` for `resume_list.py`, started via
+`Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='cmd.exe /c D:\vi-tools\fullrun_part3.cmd'}`.
 
-```bash
-cd /d/video-indexing
-/d/vi-tools/venv/Scripts/python.exe run.py --input finevideo/data --output /d/vi-tools/fullrun/part1.jsonl \
-  --done-file /d/vi-tools/fullrun/part1.jsonl.done  > /d/vi-tools/fullrun/part1.log 2>&1
-```
-
-Resume after an interruption (part N+1):
+## When the last part has finished
 
 ```bash
 cd /d/video-indexing
-/d/vi-tools/venv/Scripts/python.exe tools/resume_list.py --input finevideo/data \
-  --done /d/vi-tools/fullrun/part*.jsonl --out /d/vi-tools/fullrun/todo.txt
-/d/vi-tools/venv/Scripts/python.exe run.py --input finevideo/data --output /d/vi-tools/fullrun/partN.jsonl \
-  --done-file /d/vi-tools/fullrun/partN.jsonl.done --videos /d/vi-tools/fullrun/todo.txt > /d/vi-tools/fullrun/partN.log 2>&1
-```
-
-Merge when nothing is left to do:
-
-```bash
 /d/vi-tools/venv/Scripts/python.exe tools/merge_parts.py --input finevideo/data \
-  --parts /d/vi-tools/fullrun/part1.jsonl /d/vi-tools/fullrun/part2.jsonl ... --out results.jsonl.gz
+  --parts /d/vi-tools/fullrun/part1.jsonl /d/vi-tools/fullrun/part2.jsonl --out results.jsonl.gz
 ```
 
-Full run time for HARDWARE.md = sum of the `seconds` in each part log's final `done: {...}` line
-(plus the wall-clock start/end times of each part).
+`merge_parts.py` takes a video from a part only if it is listed in that part's `.done` file, so part1's partial
+last video is dropped automatically. Expect 1650 videos written, 0 missing.
 
-## Next steps
-
-See the bottom of `docs/measurements.md` for the latest numbers. Remaining after the full run:
-results.jsonl.gz + HARDWARE.md time, README final numbers, final repo check (token scan), `ai_chats/` is added
-by the main session, WRITEUP.md is for the candidate.
+Then: full-run time in `HARDWARE.md` = part1 wall (371 s + shutdown) + part2 wall (from `part2.times`/log),
+excluding the gap and the aborted attempt; README final numbers; token scan; push; delete this file.
+`ai_chats/` is added by the main session; WRITEUP.md stays for the candidate.
