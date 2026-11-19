@@ -112,7 +112,7 @@ Settings were tuned on 35 videos from files 02–09 (1.5 h) and then **confirmed
 
 | set | objects F1 | people exact | people within 1 |
 |---|---|---|---|
-| tuning (simulated, 35 videos) | 0.9879 | 95.44% | 99.85% |
+| tuning (real `run.py` output, FP32, 35 videos) | 0.9879 | 95.44% | 99.85% |
 | held-out (real `run.py` output, FP32, 23 videos) | 0.9905 | 96.15% | 99.86% |
 | held-out (real `run.py` output, FP16, 23 videos) | 0.9905 | 96.12% | 99.86% |
 | pass thresholds | ≥ 0.95 | ≥ 85% | ≥ 95% |
@@ -123,17 +123,21 @@ Details, the full strategy grid, profiling and dropped approaches: `docs/measure
 
 * Everything above was developed and run on Windows 11 with a Quadro P2000 (4 GB, Pascal) — see `HARDWARE.md`.
   Pascal has slow FP16, so the 50-file results were produced in FP32.
-* The grader's RTX 4090 (Ada) will use FP16 automatically. The FP16 code path was run and validated for
-  accuracy on the P2000, but its speed was not measured on a 4090.
-* The Linux install was checked for wheel availability (all pins exist for cp311 manylinux x86_64) but not
-  run on Ubuntu.
+* The grader's RTX 4090 (Ada) will use FP16 automatically (and batch 64 with two inference threads, chosen from
+  the GPU's memory). FP16 accuracy was validated on the held-out set (same metrics as FP32, table above), but
+  FP16 speed was not measured on a 4090.
+* Linux: `pip install -r requirements.txt` and `python prepare.py` were run on a Google Colab VM (Ubuntu, Python
+  3.13, Tesla T4): install OK and the FP16 self-test on the T4 matched Ultralytics. The full run itself was not
+  done there. All pins also have cp311 manylinux x86_64 wheels.
+* No TensorRT/ONNX engine is used: it could not be validated on the Pascal dev GPU, so the timed run uses
+  PyTorch (Ultralytics AutoBackend) only.
 
 ## Repository
 
 * `run.py` — entry point; `prepare.py` — one-time preparation
 * `vindex/` — pipeline (`pipeline.py`), decode workers (`worker.py`), video helpers (`video.py`),
   detector (`detector.py`), per-second rules (`common.py`)
-* `tools/` — reference, scoring, simulation, equivalence check, validation-set picker
-* `tests/` — edge-case generator, offline guard
+* `tools/` — reference, scoring, simulation, equivalence check, validation-set picker, dataset survey, profiling, resume/merge helpers, Colab notebook
+* `tests/` — edge-case generator, offline guard, unit tests (`test_rules.py`, `test_oom_recovery.py`)
 * `val/` — validation video lists, every-frame reference results, per-frame reference detections (`ref_frames_*`, to replay sampling strategies), validation outputs
 * `docs/measurements.md` — measurement log; `HARDWARE.md`; `WRITEUP.md`; `ai_chats/`
