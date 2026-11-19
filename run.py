@@ -27,8 +27,9 @@ def main():
                                                        "(k2 == k1: plain uniform sampling)")
     ap.add_argument("--band", type=float, nargs=2, default=(0.25, 0.6), metavar=("LO", "HI"),
                     help="a stage-1 detection with LO <= conf < HI marks its second as unsure")
-    ap.add_argument("--no-neighbours", action="store_true",
-                    help="do not mark a second unsure when its stage-1 result differs from a neighbour's")
+    ap.add_argument("--neighbours", choices=("objects", "all", "off"), default="objects",
+                    help="mark a second unsure when its stage-1 objects (objects) or objects and people count "
+                         "(all) differ from the previous or next second's")
     ap.add_argument("--workers", type=int, default=None, help="decode processes (default: CPU threads - 1)")
     ap.add_argument("--batch", type=int, default=None, help="GPU batch size (default: auto)")
     ap.add_argument("--fp32", action="store_true", help="force FP32 inference")
@@ -44,7 +45,7 @@ def main():
     from vindex.common import Sampling
     from vindex.pipeline import run
 
-    sampling = Sampling(a.k1, a.k2, tuple(a.band), not a.no_neighbours)
+    sampling = Sampling(a.k1, a.k2, tuple(a.band), {"objects": "objects", "all": True, "off": False}[a.neighbours])
 
     half = True if a.fp16 else (False if a.fp32 else None)
     t0 = time.time()

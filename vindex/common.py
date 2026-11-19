@@ -38,7 +38,7 @@ class Sampling:
     k1 = k2 = 0 means every frame.
     """
 
-    def __init__(self, k1=1, k2=3, band=(0.25, 0.6), neighbours=True):
+    def __init__(self, k1=1, k2=3, band=(0.25, 0.6), neighbours="objects"):
         self.k1, self.k2 = k1, max(k1, k2) if k1 > 0 else 0
         self.band = band
         self.neighbours = neighbours
