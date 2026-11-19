@@ -101,3 +101,21 @@ Real `run.py` output with the final default settings (adaptive 1->3, band [0.25,
 - 2026-11-19 18:32:39 PKT full run restarted from scratch (batch 8 chosen automatically, startup 9.5 s).
 - 2026-11-19 ~18:39 PKT part1 was killed by a Claude Code restart (all child processes of the agent shell died) after 9 complete videos, 0 errors. The run was resumed as part2 at 18:41:55 (detached from the agent via WMI so a restart cannot kill it): `tools/resume_list.py` listed 1641 videos to do; `run.py --videos todo2.txt --done-file part2.jsonl.done`. Part2 startup took 215.6 s (GPU shared with a short edge-suite test at that moment); steady state ~24 frames/s analysed, GPU 97% busy, 0 errors, 0 OOM.
 - Edge suite re-run with the final defaults (adaptive sampling, done-file, OOM handling): all 24 rows answered, the same 7 videos with error lines as the first version; corrupt-folder and empty-folder results unchanged.
+
+## Versions and timings (dev machine, P2000)
+
+Measured on the same 23 held-out videos (3606 s of video, 102,347 frames) unless marked "estimate":
+
+| version (date) | what it does | measured | full 50 files (128.03 h video, 12.98 M frames) |
+|---|---|---|---|
+| v0 (2026-11-19) `tools/reference.py` | every frame, single process, Ultralytics `predict` API | ~10 frames/s (GPU 35-60% busy) on the first tuning videos | estimate 12.98 M / 10 = ~1.3 M s (~360 h) |
+| v1 (2026-11-19) `run.py --k1 0` | every frame, decode processes + batched GPU + own NMS | 4255.6 s for the held-out set = 24.1 frames/s, GPU 97-99% busy | estimate 12.98 M / 24 = ~540,000 s (~150 h) |
+| v2 (2026-11-19, simulated) | uniform 3 frames per second | 3 frames/s of video | estimate 128.03 h x 3600 x 3 / 23 = ~60,000 s (~17 h) |
+| final (2026-11-19) `run.py` defaults | adaptive 1->3 frames per second | 287.3 s for the held-out set (5982 frames, 1.66 per s of video), GPU busy 251.7 s (88%) | measured: see HARDWARE.md (expected ~10 h: 1.8 x 460,900 s / ~24 frames/s) |
+
+Where the time goes in the final version (held-out run, FP32): wall 287.3 s; GPU busy (model + NMS, timed around
+each batch in the inference thread) 251.7 s = 88%; the rest is start-up (model load ~5-10 s, worker spawn) and the
+tail where the last videos finish. CPU work per video is small next to the GPU: decode 0.56 ms/frame for all 102k
+frames = ~57 s of CPU spread over 11 decode processes, BGR + letterbox ~1.2 ms per analysed frame (~7 s).
+Measurement method: `time.perf_counter()` around each batch in the GPU thread (`gpu_busy_seconds`), run wall time
+from `run.py`, per-stage CPU costs from `tools/profile_decode.py`.
