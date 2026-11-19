@@ -170,6 +170,22 @@ class GPURunner:
         for _ in self.threads:
             self.jobs.put(None)
 
+    def _detect_safe(self, det, x, band):
+        """det.detect; on CUDA out-of-memory free the cache and run the batch in two halves (recursively)."""
+        torch = self.torch
+        try:
+            return det.detect(x, band=band, return_dets=self.dump)
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+            if "out of memory" not in str(e).lower() or x.shape[0] == 1:
+                raise
+        torch.cuda.empty_cache()
+        h = x.shape[0] // 2
+        a = self._detect_safe(det, x[:h], band)
+        b = self._detect_safe(det, x[h:], band)
+        cat = lambda u, v: None if u is None else torch.cat((u, v))  # noqa: E731
+        return (cat(a[0], b[0]), cat(a[1], b[1]), cat(a[2], b[2]),
+                None if a[3] is None else a[3] + b[3])
+
     def _loop(self, det, stream):
         import contextlib
 
@@ -185,7 +201,7 @@ class GPURunner:
                 try:
                     x = self.bufs[bi][: n * H * W * 3].view(n, H, W, 3)
                     band = (0.25, 0.25) if self.dump and not self.band else self.band
-                    present, people, unsure, dets = det.detect(x, band=band, return_dets=self.dump)
+                    present, people, unsure, dets = self._detect_safe(det, x, band)
                     out = (items, present.cpu().numpy(), people.cpu().numpy(),
                            None if unsure is None else unsure.cpu().numpy(), dets, None)
                 except Exception as e:  # e.g. CUDA OOM on an odd batch: report, keep going
