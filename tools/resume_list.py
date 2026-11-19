@@ -35,6 +35,11 @@ def main():
                 else:
                     secs.setdefault(d["video"], set()).add(d["second"])
     complete = set(errs) | {v for v, s in secs.items() if s == set(range(max(s) + 1))}
+    done_lists = [p + ".done" for p in a.done if os.path.exists(p + ".done")]
+    if done_lists:  # written by run.py --done-file: exact, survives a torn last video
+        complete = set()
+        for p in done_lists:
+            complete |= {l.strip() for l in open(p, encoding="utf-8") if l.strip()}
     todo = []
     for f in sorted(os.listdir(a.input)):
         if not f.endswith(".parquet"):

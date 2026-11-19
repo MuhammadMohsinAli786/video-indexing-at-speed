@@ -107,7 +107,8 @@ def main():
     ap.add_argument("--ks", default="1,2,3,4,5,7")
     ap.add_argument("--adaptive", action="store_true")
     ap.add_argument("--write", nargs=2, metavar=("STRATEGY", "OUT"),
-                    help="write one strategy's lines, STRATEGY = 'uniform:K' or 'adaptive:K1:K2:LO:HI:NB'")
+                    help="write one strategy's lines, STRATEGY = 'uniform:K' or 'adaptive:K1:K2:LO:HI:NB' "
+                         "with NB 0 (off), 1 (objects and people) or o (objects only)")
     a = ap.parse_args()
     vids = load_dumps(a.dumps)
     if a.write:
@@ -115,7 +116,8 @@ def main():
         if f[0] == "uniform":
             cand, _ = uniform(vids, int(f[1]))
         else:
-            cand, _ = adaptive(vids, int(f[1]), int(f[2]), (float(f[3]), float(f[4])), bool(int(f[5])))
+            nb = {"0": False, "1": True, "o": "objects"}[f[5]]
+            cand, _ = adaptive(vids, int(f[1]), int(f[2]), (float(f[3]), float(f[4])), nb)
         with open(a.write[1], "w", encoding="utf-8") as out:
             for (v, s), (objs, people) in sorted(cand.items()):
                 out.write(json.dumps({"video": v, "second": s, "objects": [o for o in OBJECTS if o in objs],
@@ -130,11 +132,12 @@ def main():
         cand, used = uniform(vids, k)
         report(f"uniform k={k}", ref, cand, used, total_frames, total_seconds)
     if a.adaptive:
-        for k1, k2 in ((1, 3), (1, 5), (2, 5), (3, 7)):
-            for band in ((0.3, 0.55), (0.25, 0.6), (0.2, 0.7)):
-                for nb in (False, True):
+        for k1, k2 in ((1, 3), (1, 5), (3, 5), (3, 7)):
+            for band in ((0.3, 0.5), (0.3, 0.55), (0.25, 0.6), (0.2, 0.7)):
+                for nb in (False, "objects", True):
                     cand, used = adaptive(vids, k1, k2, band, nb)
-                    report(f"adaptive {k1}->{k2} band={band} nb={int(nb)}", ref, cand, used, total_frames, total_seconds)
+                    report(f"adaptive {k1}->{k2} band={band} nb={str(nb)[0]}", ref, cand, used, total_frames,
+                           total_seconds)
 
 
 if __name__ == "__main__":

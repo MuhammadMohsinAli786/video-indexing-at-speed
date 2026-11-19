@@ -35,6 +35,7 @@ def main():
     ap.add_argument("--fp16", action="store_true", help="force FP16 inference")
     ap.add_argument("--videos", help=argparse.SUPPRESS)  # dev: file with 'name.parquet:row' ids to process
     ap.add_argument("--dump-dets", help=argparse.SUPPRESS)  # dev: per-frame detections (conf>=0.25) dir
+    ap.add_argument("--done-file", help="append each finished video id here (for resuming an interrupted run)")
     a = ap.parse_args()
     only = None
     if a.videos:
@@ -48,7 +49,8 @@ def main():
     half = True if a.fp16 else (False if a.fp32 else None)
     t0 = time.time()
     res = run(a.input, a.output, a.weights, sampling=sampling, workers=a.workers, batch=a.batch,
-              half=half, log=lambda s: print(s, file=sys.stderr, flush=True), only=only, dump_dir=a.dump_dets)
+              half=half, log=lambda s: print(s, file=sys.stderr, flush=True), only=only, dump_dir=a.dump_dets,
+              done_file=a.done_file)
     print(f"wrote {res['lines']} lines for {res['videos']} videos in {time.time() - t0:.1f} s", file=sys.stderr)
 
 

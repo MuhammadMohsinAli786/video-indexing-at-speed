@@ -33,7 +33,10 @@ Options (defaults are chosen automatically and are what was validated):
 
 | option | default | meaning |
 |---|---|---|
-| `-k / --samples-per-second` | `3` | frames analysed per second of video (`0` = every frame) |
+| `--k1` | `1` | stage-1 frames analysed per second of video (`0` = every frame) |
+| `--k2` | `3` | frames per second used for seconds flagged as unsure (`k2 = k1`: plain uniform sampling) |
+| `--band LO HI` | `0.25 0.6` | a stage-1 detection with confidence in [LO, HI) flags its second as unsure |
+| `--no-neighbours` | off | do not flag a second whose stage-1 result differs from a neighbouring second's |
 | `--workers` | CPU threads − 1 | decode processes |
 | `--batch` | auto (largest of 64/32/… that fits) | GPU batch size |
 | `--fp16 / --fp32` | FP16 on Volta or newer, FP32 on older GPUs | inference precision |

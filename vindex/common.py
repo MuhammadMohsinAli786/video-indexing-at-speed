@@ -60,8 +60,11 @@ class Sampling:
         if cur_unsure:
             return True
         if self.neighbours:
+            objects_only = self.neighbours == "objects"
             for other in (prev, nxt):
-                if other is not None and other != cur:
+                if other is None:
+                    continue
+                if (other[0] != cur[0]) if objects_only else (other != cur):
                     return True
         return False
 

@@ -89,23 +89,46 @@ def reader_thread(files, task_q, err_lines, n_workers, stop, only=None):
 
 
 class Writer:
-    def __init__(self, path):
+    """Output lines. With a done-file, a video id is appended there only after its lines are flushed to the
+    output, so after an interruption every video listed in the done-file is complete (used for resuming)."""
+
+    def __init__(self, path, done_path=None):
         d = os.path.dirname(os.path.abspath(path))
         os.makedirs(d, exist_ok=True)
         self.f = open(path, "w", encoding="utf-8", newline="\n")
+        self.done_f = open(done_path, "a", encoding="utf-8", newline="\n") if done_path else None
+        self.finished = []
         self.n = 0
         self.last_flush = time.monotonic()
 
     def write(self, obj):
         self.f.write(json.dumps(obj, ensure_ascii=False) + "\n")
         self.n += 1
+
+    def write_error(self, obj):
+        self.write(obj)
+        self.video_done(obj["video"])
+
+    def video_done(self, vid):
+        self.finished.append(vid)
         if time.monotonic() - self.last_flush > 2.0:
-            self.f.flush()
-            self.last_flush = time.monotonic()
+            self.flush()
+
+    def flush(self):
+        self.f.flush()
+        if self.done_f:
+            os.fsync(self.f.fileno())
+            if self.finished:
+                self.done_f.write("".join(v + "\n" for v in self.finished))
+                self.done_f.flush()
+        self.finished = []
+        self.last_flush = time.monotonic()
 
     def close(self):
-        self.f.flush()
+        self.flush()
         self.f.close()
+        if self.done_f:
+            self.done_f.close()
 
 
 def video_lines(vid, samples, n_seconds):
@@ -173,11 +196,11 @@ class GPURunner:
 
 
 def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_slots=None, half=None,
-        threads_per_worker=1, log=print, only=None, dump_dir=None, gpu_threads=None):
+        threads_per_worker=1, log=print, only=None, dump_dir=None, gpu_threads=None, done_file=None):
     sampling = sampling or Sampling()
     t_start = time.time()
     files = list_parquets(input_dir)
-    writer = Writer(output)
+    writer = Writer(output, done_file)
     if not files:
         writer.close()
         log("no .parquet files found; wrote an empty output file")
@@ -289,6 +312,7 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
         if err:
             writer.write({"video": vid, "error": err})
             n_err += 1
+        writer.video_done(vid)
         inflight.pop(vid, None)
         for d in (owner, s1, s1_unsure, s1_expected, cands, last_sec):
             d.pop(vid, None)
@@ -352,7 +376,7 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
     last_report = time.monotonic()
     while True:
         while not err_lines.empty():
-            writer.write(err_lines.get())
+            writer.write_error(err_lines.get())
             n_err += 1
         handle_results()
         try:
@@ -432,7 +456,7 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
     for vid in list(done_info):
         finish(vid)
     while not err_lines.empty():
-        writer.write(err_lines.get())
+        writer.write_error(err_lines.get())
         n_err += 1
     writer.close()
     stop.set()
