@@ -3,6 +3,13 @@
 State as of 2026-11-19 evening. Environment: venv `D:\vi-tools\venv` (Python 3.11.9, torch 2.14.1+cu126).
 Data: `D:\video-indexing\finevideo\data` (50 files, verified). Weights: `D:\video-indexing\weights\yolo11l.pt`.
 
+## Automated chain (started 2026-11-19 ~17:00)
+
+`D:\vi-tools\after_refs.sh` waits for the held-out reference (`val/ref_heldout.jsonl`), then runs the final
+settings on held-out (FP32 + FP16) and on the tuning set, scores them into `D:\vi-tools\logs\after_refs.log`,
+and starts the full run (`D:\vi-tools\fullrun\part1.jsonl` + `.done`, log `part1.log`) if held-out FP32 keeps
+F1 >= 0.98, exact >= 92%, within-1 >= 98%. Check `after_refs.log` first.
+
 ## Full 50-file run (resumable)
 
 Run parts go to `D:\vi-tools\fullrun\` (outside the repo). Each part has a `.done` list of finished videos.

@@ -88,11 +88,36 @@ the lines for the seconds decoded so far and adds one error line. A decode proce
 restarted and its video gets an error line (tested with injected crash/hang). The timed run makes no network
 access (tested with sockets blocked in every process: `tests/offline_guard`).
 
+## Sampling: why it is fast and still correct
+
+The model is the cost (on the grader's machine as here), so the main lever is how many frames go through it.
+`run.py` uses **adaptive two-stage sampling**:
+
+* stage 1: the middle frame of every second;
+* a second is *unsure* if a stage-1 detection of the five classes has confidence in [0.25, 0.6) (close to the
+  0.4 threshold), or if its stage-1 objects differ from the previous or next second's;
+* unsure seconds also get the frames at 1/6 and 5/6 of the second (3 evenly spaced frames in total), and are
+  aggregated over them with the grader's rules (≥ half → present; median people, rounded down).
+
+On average 1.8 frames per second of video are analysed (≈ 6.7% of all frames) instead of ~28.
+
 ## Validation
 
-`tools/reference.py` / `run.py -k 0` produce the every-frame reference; `tools/score.py` computes the
-grader's three metrics; `tools/simulate.py` replays sampling strategies offline. Numbers are in
-`docs/measurements.md`.
+`tools/reference.py` (Ultralytics predict on every frame) and `run.py --k1 0` (every frame through our
+pipeline; identical to the former) give the every-frame reference; `tools/score.py` computes the grader's three
+metrics; `tools/simulate.py` replays sampling strategies offline on the reference's per-frame detections.
+
+Settings were tuned on 35 videos from files 02–09 (1.5 h) and then **confirmed on 23 held-out videos from files
+45–49 (1 h) that were not used for tuning**:
+
+| set | objects F1 | people exact | people within 1 |
+|---|---|---|---|
+| tuning (simulated, 35 videos) | 0.9879 | 95.44% | 99.85% |
+| held-out (real `run.py` output, FP32, 23 videos) | 0.9905 | 96.15% | 99.86% |
+| held-out (real `run.py` output, FP16, 23 videos) | 0.9905 | 96.12% | 99.86% |
+| pass thresholds | ≥ 0.95 | ≥ 85% | ≥ 95% |
+
+Details, the full strategy grid, profiling and dropped approaches: `docs/measurements.md`.
 
 ## What was tested where
 

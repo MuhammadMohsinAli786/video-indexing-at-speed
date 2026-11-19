@@ -71,3 +71,19 @@ Full grid: 4 (k1,k2) x 4 bands x 3 neighbour modes, output kept in the run log. 
 - F1 levels off near 0.99 even at k=5 (objects present in about half of a second's frames).
 - Chosen setting: same accuracy as uniform k=3 with 39% fewer frames; the wider band was kept over [0.3,0.5) (5% fewer frames, same accuracy) as the more conservative choice for unseen data.
 - Per object (22-video interim check, chosen setting): person 0.989, car 0.973, dog 1.000, laptop 0.965, cell phone 0.972; worst single video F1 0.962, worst single-video people exact 85.2%.
+
+## Held-out confirmation (23 videos from files 45-49, 3606 s, 102,347 frames; not used for tuning)
+
+Every-frame reference (`run.py --k1 0`, FP32, P2000): 4255.6 s wall.
+Real `run.py` output with the final default settings (adaptive 1->3, band [0.25,0.6), neighbours objects), scored with `tools/score.py`:
+
+| run (2026-11-19, P2000) | frames analysed | wall | GPU busy | objects F1 (P / R) | people exact | within 1 |
+|---|---|---|---|---|---|---|
+| final, FP32 | 5982 (1.66/s of video, 5.8%) | 287.3 s | 251.7 s | 0.9905 (0.9907 / 0.9903) | 96.15% | 99.86% |
+| final, FP16 | 5976 | 243.6 s | 222.7 s | 0.9905 (0.9910 / 0.9899) | 96.12% | 99.86% |
+
+- Per object (FP32): person 0.9947 (2440 positive seconds), laptop 0.9799 (176), dog 1.0000 (8), cell phone 0.8736 (40), car 0.7879 (15). The low car/cell-phone F1 comes from few positive seconds.
+- The real pipeline output equals the simulator's prediction for this setting (simulated: F1 0.9905, exact 96.15%, within-1 99.86%).
+- Same videos, same GPU: every frame 4255.6 s vs final 287.3 s = 14.8x faster.
+- Held-out simulation of other strategies (`val/sim_heldout_grid.txt`): uniform k=1 F1 0.9770 / exact 93.54% / within-1 99.25%; uniform k=3 0.9907 / 96.48% / 99.86%; uniform k=5 0.9929 / 96.59% / 99.92%.
+- FP16 vs FP32 changed 6 of ~5980 sampled frames' stage-2 decisions and no metric beyond the 4th digit (on Pascal, where FP16 is not faster: 243.6 s vs 287.3 s wall here).

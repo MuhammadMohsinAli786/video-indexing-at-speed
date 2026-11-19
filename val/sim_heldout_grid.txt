@@ -1,0 +1,53 @@
+23 videos, 3606 seconds, 102347 frames (28.4 frames/s)
+uniform k=1                        frames/s= 1.00 (  3.5% of frames)  F1=0.9770  exact=93.54%  within1=99.25%  person=
+uniform k=2                        frames/s= 2.00 (  7.0% of frames)  F1=0.9633  exact=91.49%  within1=98.84%  person=
+uniform k=3                        frames/s= 3.00 ( 10.6% of frames)  F1=0.9907  exact=96.48%  within1=99.86%  person=
+uniform k=5                        frames/s= 4.99 ( 17.6% of frames)  F1=0.9929  exact=96.59%  within1=99.92%  person=
+adaptive 1->3 band=(0.3, 0.5) nb=F frames/s= 1.27 (  4.5% of frames)  F1=0.9849  exact=94.98%  within1=99.75%  person=
+adaptive 1->3 band=(0.3, 0.5) nb=o frames/s= 1.56 (  5.5% of frames)  F1=0.9909  exact=95.81%  within1=99.86%  person=
+adaptive 1->3 band=(0.3, 0.5) nb=T frames/s= 1.74 (  6.1% of frames)  F1=0.9905  exact=96.48%  within1=99.89%  person=
+adaptive 1->3 band=(0.3, 0.55) nb=F frames/s= 1.32 (  4.6% of frames)  F1=0.9862  exact=95.31%  within1=99.75%  person
+adaptive 1->3 band=(0.3, 0.55) nb=o frames/s= 1.59 (  5.6% of frames)  F1=0.9907  exact=96.01%  within1=99.86%  person
+adaptive 1->3 band=(0.3, 0.55) nb=T frames/s= 1.75 (  6.2% of frames)  F1=0.9903  exact=96.45%  within1=99.89%  person
+adaptive 1->3 band=(0.25, 0.6) nb=F frames/s= 1.42 (  5.0% of frames)  F1=0.9878  exact=95.76%  within1=99.81%  person
+adaptive 1->3 band=(0.25, 0.6) nb=o frames/s= 1.66 (  5.8% of frames)  F1=0.9905  exact=96.15%  within1=99.86%  person
+adaptive 1->3 band=(0.25, 0.6) nb=T frames/s= 1.80 (  6.3% of frames)  F1=0.9903  exact=96.45%  within1=99.89%  person
+adaptive 1->3 band=(0.2, 0.7) nb=F frames/s= 1.50 (  5.3% of frames)  F1=0.9888  exact=95.95%  within1=99.81%  person=
+adaptive 1->3 band=(0.2, 0.7) nb=o frames/s= 1.72 (  6.1% of frames)  F1=0.9907  exact=96.34%  within1=99.86%  person=
+adaptive 1->3 band=(0.2, 0.7) nb=T frames/s= 1.84 (  6.5% of frames)  F1=0.9905  exact=96.51%  within1=99.89%  person=
+adaptive 1->5 band=(0.3, 0.5) nb=F frames/s= 1.54 (  5.4% of frames)  F1=0.9864  exact=95.37%  within1=99.83%  person=
+adaptive 1->5 band=(0.3, 0.5) nb=o frames/s= 2.12 (  7.5% of frames)  F1=0.9925  exact=95.92%  within1=99.89%  person=
+adaptive 1->5 band=(0.3, 0.5) nb=T frames/s= 2.48 (  8.8% of frames)  F1=0.9925  exact=96.56%  within1=99.92%  person=
+adaptive 1->5 band=(0.3, 0.55) nb=F frames/s= 1.64 (  5.8% of frames)  F1=0.9879  exact=95.70%  within1=99.83%  person
+adaptive 1->5 band=(0.3, 0.55) nb=o frames/s= 2.18 (  7.7% of frames)  F1=0.9925  exact=96.15%  within1=99.89%  person
+adaptive 1->5 band=(0.3, 0.55) nb=T frames/s= 2.51 (  8.8% of frames)  F1=0.9925  exact=96.56%  within1=99.92%  person
+adaptive 1->5 band=(0.25, 0.6) nb=F frames/s= 1.84 (  6.5% of frames)  F1=0.9895  exact=95.92%  within1=99.86%  person
+adaptive 1->5 band=(0.25, 0.6) nb=o frames/s= 2.32 (  8.2% of frames)  F1=0.9927  exact=96.23%  within1=99.89%  person
+adaptive 1->5 band=(0.25, 0.6) nb=T frames/s= 2.60 (  9.2% of frames)  F1=0.9927  exact=96.59%  within1=99.92%  person
+adaptive 1->5 band=(0.2, 0.7) nb=F frames/s= 2.01 (  7.1% of frames)  F1=0.9905  exact=96.20%  within1=99.86%  person=
+adaptive 1->5 band=(0.2, 0.7) nb=o frames/s= 2.44 (  8.6% of frames)  F1=0.9929  exact=96.48%  within1=99.89%  person=
+adaptive 1->5 band=(0.2, 0.7) nb=T frames/s= 2.68 (  9.4% of frames)  F1=0.9929  exact=96.64%  within1=99.92%  person=
+adaptive 3->5 band=(0.3, 0.5) nb=F frames/s= 4.04 ( 14.2% of frames)  F1=0.9940  exact=96.98%  within1=99.92%  person=
+adaptive 3->5 band=(0.3, 0.5) nb=o frames/s= 4.38 ( 15.4% of frames)  F1=0.9940  exact=96.98%  within1=99.92%  person=
+adaptive 3->5 band=(0.3, 0.5) nb=T frames/s= 4.58 ( 16.1% of frames)  F1=0.9940  exact=96.95%  within1=99.92%  person=
+adaptive 3->5 band=(0.3, 0.55) nb=F frames/s= 4.15 ( 14.6% of frames)  F1=0.9938  exact=96.95%  within1=99.92%  person
+adaptive 3->5 band=(0.3, 0.55) nb=o frames/s= 4.46 ( 15.7% of frames)  F1=0.9940  exact=96.95%  within1=99.92%  person
+adaptive 3->5 band=(0.3, 0.55) nb=T frames/s= 4.63 ( 16.3% of frames)  F1=0.9940  exact=96.95%  within1=99.92%  person
+adaptive 3->5 band=(0.25, 0.6) nb=F frames/s= 4.36 ( 15.4% of frames)  F1=0.9940  exact=97.00%  within1=99.92%  person
+adaptive 3->5 band=(0.25, 0.6) nb=o frames/s= 4.64 ( 16.3% of frames)  F1=0.9940  exact=96.95%  within1=99.92%  person
+adaptive 3->5 band=(0.25, 0.6) nb=T frames/s= 4.78 ( 16.8% of frames)  F1=0.9940  exact=96.95%  within1=99.92%  person
+adaptive 3->5 band=(0.2, 0.7) nb=F frames/s= 4.53 ( 16.0% of frames)  F1=0.9940  exact=97.00%  within1=99.92%  person=
+adaptive 3->5 band=(0.2, 0.7) nb=o frames/s= 4.76 ( 16.8% of frames)  F1=0.9940  exact=96.95%  within1=99.92%  person=
+adaptive 3->5 band=(0.2, 0.7) nb=T frames/s= 4.87 ( 17.1% of frames)  F1=0.9940  exact=96.95%  within1=99.92%  person=
+adaptive 3->7 band=(0.3, 0.5) nb=F frames/s= 4.56 ( 16.1% of frames)  F1=0.9942  exact=97.81%  within1=99.94%  person=
+adaptive 3->7 band=(0.3, 0.5) nb=o frames/s= 5.07 ( 17.9% of frames)  F1=0.9946  exact=97.86%  within1=99.94%  person=
+adaptive 3->7 band=(0.3, 0.5) nb=T frames/s= 5.37 ( 18.9% of frames)  F1=0.9946  exact=97.75%  within1=99.94%  person=
+adaptive 3->7 band=(0.3, 0.55) nb=F frames/s= 4.72 ( 16.6% of frames)  F1=0.9942  exact=97.81%  within1=99.94%  person
+adaptive 3->7 band=(0.3, 0.55) nb=o frames/s= 5.19 ( 18.3% of frames)  F1=0.9946  exact=97.86%  within1=99.94%  person
+adaptive 3->7 band=(0.3, 0.55) nb=T frames/s= 5.45 ( 19.2% of frames)  F1=0.9946  exact=97.75%  within1=99.94%  person
+adaptive 3->7 band=(0.25, 0.6) nb=F frames/s= 5.05 ( 17.8% of frames)  F1=0.9942  exact=97.81%  within1=99.94%  person
+adaptive 3->7 band=(0.25, 0.6) nb=o frames/s= 5.45 ( 19.2% of frames)  F1=0.9946  exact=97.84%  within1=99.94%  person
+adaptive 3->7 band=(0.25, 0.6) nb=T frames/s= 5.66 ( 20.0% of frames)  F1=0.9946  exact=97.75%  within1=99.94%  person
+adaptive 3->7 band=(0.2, 0.7) nb=F frames/s= 5.29 ( 18.6% of frames)  F1=0.9944  exact=97.81%  within1=99.94%  person=
+adaptive 3->7 band=(0.2, 0.7) nb=o frames/s= 5.64 ( 19.9% of frames)  F1=0.9946  exact=97.78%  within1=99.94%  person=
+adaptive 3->7 band=(0.2, 0.7) nb=T frames/s= 5.80 ( 20.4% of frames)  F1=0.9946  exact=97.75%  within1=99.94%  person=
