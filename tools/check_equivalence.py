@@ -64,7 +64,7 @@ def main():
         ours = []
         for i in range(0, len(imgs), 16):
             x = torch.from_numpy(np.stack([letterbox_into(im) for im in imgs[i:i + 16]]))
-            pr, pp = det.detect(x)
+            pr, pp, _, _ = det.detect(x)
             ours += list(zip(pr.cpu().numpy().tolist(), pp.cpu().numpy().tolist()))
         # reference, one frame at a time
         for im, (opr, opp) in zip(imgs, ours):

@@ -20,7 +20,7 @@ from multiprocessing import shared_memory
 
 import numpy as np
 
-from .common import aggregate
+from .common import Sampling, aggregate
 from .worker import CUR_BYTES, SLOT_BYTES, get_current, set_current, worker_main
 
 HANG_SECONDS = float(os.environ.get("VINDEX_HANG_SECONDS", "600"))  # silent worker (with free slots) = hung
@@ -114,11 +114,11 @@ def video_lines(vid, samples, n_seconds):
 class GPURunner(threading.Thread):
     """Runs detector batches from `jobs` and puts results on `results` (one thread owns the GPU)."""
 
-    def __init__(self, det, batch, n_bufs, dump):
+    def __init__(self, det, batch, n_bufs, dump, band):
         super().__init__(daemon=True)
         import torch
 
-        self.det, self.dump = det, dump
+        self.det, self.dump, self.band = det, dump, band
         pin = det.device.type == "cuda"
         self.bufs = [torch.empty(batch * SLOT_BYTES, dtype=torch.uint8, pin_memory=pin) for _ in range(n_bufs)]
         self.np_bufs = [b.numpy() for b in self.bufs]
@@ -139,20 +139,20 @@ class GPURunner(threading.Thread):
             t0 = time.perf_counter()
             try:
                 x = self.bufs[bi][: n * H * W * 3].view(n, H, W, 3)
-                if self.dump:
-                    present, people, dets = self.det.detect(x, conf_thres=0.25, return_dets=True)
-                else:
-                    (present, people), dets = self.det.detect(x), None
-                out = (items, present.cpu().numpy(), people.cpu().numpy(), dets, None)
+                band = (0.25, 0.25) if self.dump and not self.band else self.band
+                present, people, unsure, dets = self.det.detect(x, band=band, return_dets=self.dump)
+                out = (items, present.cpu().numpy(), people.cpu().numpy(),
+                       None if unsure is None else unsure.cpu().numpy(), dets, None)
             except Exception as e:  # e.g. CUDA OOM on an odd batch: report, keep going
-                out = (items, None, None, None, f"{type(e).__name__}: {e}")
+                out = (items, None, None, None, None, f"{type(e).__name__}: {e}")
             self.busy_seconds += time.perf_counter() - t0
             self.free.put(bi)
             self.results.put(out)
 
 
-def run(input_dir, output, weights, k=3, workers=None, batch=None, n_slots=None, half=None,
+def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_slots=None, half=None,
         threads_per_worker=1, log=print, only=None, dump_dir=None):
+    sampling = sampling or Sampling()
     t_start = time.time()
     files = list_parquets(input_dir)
     writer = Writer(output)
@@ -173,7 +173,7 @@ def run(input_dir, output, weights, k=3, workers=None, batch=None, n_slots=None,
     if n_slots is None:
         n_slots = max(6 * batch, 4 * workers, 64)
     log(f"device={det.device} ({torch.cuda.get_device_name(0) if det.device.type == 'cuda' else 'cpu'}) "
-        f"half={det.half} batch={batch} workers={workers} slots={n_slots} k={k} "
+        f"half={det.half} batch={batch} workers={workers} slots={n_slots} sampling: {sampling.describe()} "
         f"startup={time.time() - t_start:.1f}s")
 
     ctx = mp.get_context("spawn")
@@ -187,18 +187,20 @@ def run(input_dir, output, weights, k=3, workers=None, batch=None, n_slots=None,
     err_lines = queue.Queue()
     stop = threading.Event()
     cur = ctx.RawArray("c", CUR_BYTES * workers)  # what each worker is decoding (written synchronously)
+    ctrl = {}  # wid -> control queue (stage-2 decisions)
 
     def start_worker(wid):
         set_current(cur, wid, None)
-        p = ctx.Process(target=worker_main, args=(wid, task_q, msg_q, free_q, shm.name, n_slots, k,
-                                                  threads_per_worker, None, cur), daemon=True)
+        ctrl[wid] = ctx.Queue()
+        p = ctx.Process(target=worker_main, args=(wid, task_q, msg_q, free_q, ctrl[wid], shm.name, n_slots, sampling,
+                                                  threads_per_worker, cur), daemon=True)
         p.start()
         return p
 
     procs = {wid: start_worker(wid) for wid in range(workers)}
     rt = threading.Thread(target=reader_thread, args=(files, task_q, err_lines, workers, stop, only), daemon=True)
     rt.start()
-    gpu = GPURunner(det, batch, 3, bool(dump_dir))
+    gpu = GPURunner(det, batch, 3, bool(dump_dir), sampling.band if sampling.adaptive else None)
     gpu.start()
 
     samples = defaultdict(lambda: defaultdict(list))  # vid -> second -> [(present, people)]
@@ -211,8 +213,43 @@ def run(input_dir, output, weights, k=3, workers=None, batch=None, n_slots=None,
     current = {}  # wid -> vid being processed
     last_msg = {wid: time.monotonic() for wid in procs}
     pending = defaultdict(list)  # (H, W) -> [(slot, vid, second, pts)]
-    n_videos = n_frames = n_err = 0
+    n_videos = n_frames = n_err = n_stage2 = 0
     jobs_out = 0
+    # adaptive sampling state, per video
+    owner = {}  # vid -> wid
+    s1 = defaultdict(lambda: defaultdict(list))  # vid -> second -> stage-1 [(present, people)]
+    s1_unsure = defaultdict(dict)  # vid -> second -> bool
+    s1_expected = defaultdict(dict)  # vid -> second -> number of stage-1 frames sent
+    cands = defaultdict(set)  # vid -> seconds whose stage-2 decision is pending
+    last_sec = defaultdict(lambda: -1)  # vid -> highest second announced
+    s1_finished = set()  # vids whose decoding ended
+
+    def s1_ready(vid, t):
+        return t in s1_expected[vid] and len(s1[vid].get(t, ())) >= s1_expected[vid][t]
+
+    def s1_result(vid, t):
+        return aggregate(s1[vid][t]) if t in s1_expected[vid] else None
+
+    def try_decide(vid):
+        if not cands.get(vid):
+            return
+        for s in sorted(cands[vid]):
+            if not s1_ready(vid, s):
+                continue
+            ok = True
+            for t in (s - 1, s + 1):
+                known = t < 0 or t <= last_sec[vid] or vid in s1_finished
+                if not known or (t in s1_expected[vid] and not s1_ready(vid, t)):
+                    ok = False
+                    break
+            if not ok:
+                continue
+            more = sampling.needs_more(s1_result(vid, s - 1), s1_result(vid, s), s1_result(vid, s + 1),
+                                       s1_unsure[vid].get(s, False))
+            cands[vid].discard(s)
+            q = ctrl.get(owner.get(vid))
+            if q is not None:
+                q.put(("more" if more else "drop", vid, s))
 
     def finish(vid):
         nonlocal n_videos, n_err
@@ -227,6 +264,9 @@ def run(input_dir, output, weights, k=3, workers=None, batch=None, n_slots=None,
             writer.write({"video": vid, "error": err})
             n_err += 1
         inflight.pop(vid, None)
+        for d in (owner, s1, s1_unsure, s1_expected, cands, last_sec):
+            d.pop(vid, None)
+        s1_finished.discard(vid)
         n_videos += 1
         if dump_dir:
             fr = sorted(dumps.pop(vid, []))
@@ -250,21 +290,33 @@ def run(input_dir, output, weights, k=3, workers=None, batch=None, n_slots=None,
         nonlocal n_frames, jobs_out
         while True:
             try:
-                items, present, people, dets, gerr = gpu.results.get(block=block, timeout=0.5 if block else None)
+                items, present, people, unsure, dets, gerr = gpu.results.get(block=block,
+                                                                             timeout=0.5 if block else None)
             except queue.Empty:
                 return
             block = False
             jobs_out -= 1
-            for i, (_, vid, s, pts) in enumerate(items):
+            touched = set()
+            for i, (_, vid, s, pts, stage) in enumerate(items):
                 if gerr is not None:
                     gpu_errors.setdefault(vid, f"inference failed: {gerr}"[:500])
+                    r = ((False,) * 5, 0)
                 else:
-                    samples[vid][s].append((tuple(bool(b) for b in present[i]), int(people[i])))
+                    r = (tuple(bool(b) for b in present[i]), int(people[i]))
+                    samples[vid][s].append(r)
                     if dets is not None:
                         dumps[vid].append((pts if pts is not None else -1, s, dets[i]))
+                if stage == 1 and sampling.adaptive:
+                    s1[vid][s].append(r)
+                    if unsure is not None and unsure[i]:
+                        s1_unsure[vid][s] = True
+                    touched.add(vid)
                 inflight[vid] -= 1
                 if inflight[vid] == 0 and vid in done_info:
                     finish(vid)
+            for vid in touched:
+                if vid not in done_info:
+                    try_decide(vid)
             n_frames += len(items)
 
     def flush_largest():
@@ -285,16 +337,28 @@ def run(input_dir, output, weights, k=3, workers=None, batch=None, n_slots=None,
             kind, wid = m[0], m[1]
             last_msg[wid] = time.monotonic()
             if kind == "f":
-                _, _, vid, s, slot, H, W, pts = m
+                _, _, vid, s, slot, H, W, pts, stage = m
                 if vid in done_info and current.get(wid) != vid:
                     free_q.put(slot)  # late frame of a video the watchdog already gave up on
                     continue
                 inflight[vid] += 1
-                pending[(H, W)].append((slot, vid, s, pts))
+                n_stage2 += stage == 2
+                pending[(H, W)].append((slot, vid, s, pts, stage))
                 if len(pending[(H, W)]) >= batch:
                     submit((H, W))
             elif kind == "start":
                 current[wid] = m[2]
+                owner[m[2]] = wid
+            elif kind == "sec":
+                _, _, vid, s, n1, has_c = m
+                s1_expected[vid][s] = n1
+                last_sec[vid] = max(last_sec[vid], s)
+                if has_c:
+                    cands[vid].add(s)
+                try_decide(vid)
+            elif kind == "s1done":
+                s1_finished.add(m[2])
+                try_decide(m[2])
             elif kind == "done":
                 _, _, vid, n_sec, err = m
                 current.pop(wid, None)
@@ -332,7 +396,7 @@ def run(input_dir, output, weights, k=3, workers=None, batch=None, n_slots=None,
         if time.monotonic() - last_report > 60:
             last_report = time.monotonic()
             el = time.time() - t_start
-            log(f"[{el:7.0f}s] videos={n_videos} frames={n_frames} ({n_frames / el:.1f}/s) "
+            log(f"[{el:7.0f}s] videos={n_videos} frames={n_frames} ({n_frames / el:.1f}/s, stage2={n_stage2}) "
                 f"gpu_busy={gpu.busy_seconds:.0f}s lines={writer.n} errors={n_err}")
 
     while pending:
@@ -355,7 +419,8 @@ def run(input_dir, output, weights, k=3, workers=None, batch=None, n_slots=None,
     shm.close()
     shm.unlink()
     el = time.time() - t_start
-    res = {"videos": n_videos, "frames": n_frames, "lines": writer.n, "errors": n_err, "seconds": round(el, 1),
+    res = {"videos": n_videos, "frames": n_frames, "stage2_frames": n_stage2, "lines": writer.n, "errors": n_err,
+           "seconds": round(el, 1),
            "gpu_busy_seconds": round(gpu.busy_seconds, 1)}
     log(f"done: {res}")
     return res

@@ -60,7 +60,7 @@ def letterbox_into(img, out=None):
 
 
 class Detector:
-    """Batched YOLO11l on the GPU. ``detect(batch_uint8_bhwc)`` -> (present[B,5] bool, people[B] int)."""
+    """Batched YOLO11l on the GPU. ``detect(batch_uint8_bhwc)`` -> (present[B,5], people[B], unsure, dets)."""
 
     def __init__(self, weights, device="cuda:0", half=None, verbose=False):
         import torch
@@ -99,24 +99,28 @@ class Detector:
             y = y[0]
         return y  # (B, 4 + 80, N)
 
-    def postprocess(self, pred, conf_thres=CONF, return_dets=False):
-        """Ultralytics non_max_suppression restricted to our classes, batched. Returns (present, people).
+    def postprocess(self, pred, band=None, return_dets=False):
+        """Ultralytics non_max_suppression restricted to our classes, batched.
 
-        With return_dets, also returns per image the kept detections [(object_index, conf)] with
-        conf >= conf_thres (present/people still count only conf >= CONF).
+        Returns (present[B,5] bool, people[B] int, unsure[B] bool or None, dets or None).
+        present/people count only detections with conf >= CONF (0.4). With ``band=(lo, hi)``, NMS also keeps
+        boxes down to ``lo`` and ``unsure`` flags images having a kept detection with lo <= conf < hi.
+        Lower-scoring boxes never suppress higher-scoring ones, so the conf >= 0.4 result is unchanged.
+        With ``return_dets`` (needs band or uses CONF), the kept [(object_index, conf)] per image are returned.
         """
         torch = self.torch
         import torchvision
 
+        thr = min(CONF, band[0]) if band else CONF
         pred = pred.float()
         B = pred.shape[0]
-        scores_all = pred[:, 4:84, :]  # (B, 80, N)
-        conf, j = scores_all.max(1)  # best class per box (B, N)
-        keep = (conf >= conf_thres) & (self.lut[j] >= 0)
+        conf, j = pred[:, 4:84, :].max(1)  # best class per box over all 80 classes (B, N)
+        keep = (conf >= thr) & (self.lut[j] >= 0)
         present = torch.zeros((B, len(CLASS_IDS)), dtype=torch.bool, device=pred.device)
         people = torch.zeros((B,), dtype=torch.long, device=pred.device)
+        unsure = torch.zeros((B,), dtype=torch.bool, device=pred.device) if band else None
         if not bool(keep.any()):
-            return (present, people, [[] for _ in range(B)]) if return_dets else (present, people)
+            return present, people, unsure, ([[] for _ in range(B)] if return_dets else None)
         b_idx, n_idx = keep.nonzero(as_tuple=True)
         xywh = pred[b_idx, 0:4, n_idx]  # (M, 4)
         xy, wh = xywh[:, :2], xywh[:, 2:] / 2
@@ -140,13 +144,17 @@ class Detector:
             dets = [[] for _ in range(B)]
             for b, c_, s_ in zip(kb.tolist(), kc.tolist(), ks.tolist()):
                 dets[b].append((c_, round(s_, 4)))
+        if band:
+            inband = (ks >= band[0]) & (ks < band[1])
+            unsure[kb[inband]] = True
         strong = ks >= CONF
         kb, kc = kb[strong], kc[strong]
         present[kb, kc] = True
         people = torch.bincount(kb[kc == 0], minlength=B)
-        return (present, people, dets) if return_dets else (present, people)
+        return present, people, unsure, dets
 
-    def detect(self, batch, conf_thres=CONF, return_dets=False):
+    def detect(self, batch, band=None, return_dets=False):
+        """uint8 BHWC letterboxed batch -> (present, people, unsure, dets); see postprocess."""
         with self.torch.inference_mode():
             x = self.preprocess(batch)
-            return self.postprocess(self.raw(x), conf_thres, return_dets)
+            return self.postprocess(self.raw(x), band, return_dets)

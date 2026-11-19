@@ -77,7 +77,7 @@ def self_test():
         img = cv2.imread(str(ASSETS / name))
         x = torch.from_numpy(np.stack([letterbox_into(img)] * 4))
         t = time.time()
-        present, people = det.detect(x)
+        present, people, _, _ = det.detect(x)
         torch.cuda.synchronize()
         r = yolo.predict(img, imgsz=640, conf=CONF, iou=IOU, verbose=False)[0]
         cls = r.boxes.cls.int().tolist()

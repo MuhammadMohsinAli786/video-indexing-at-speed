@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from vindex.common import CONF, OBJECTS, aggregate, pick_indices  # noqa: E402
+from vindex.common import CONF, OBJECTS, Sampling, aggregate, pick_indices  # noqa: E402
 from tools.score import score  # noqa: E402
 
 
@@ -68,31 +68,27 @@ def uniform(vids, k):
 
 
 def adaptive(vids, k1, k2, band=(0.25, 0.6), neighbours=True):
-    """Stage 1: k1 frames per second. Stage 2: k2 frames for 'uncertain' seconds, i.e. a stage-1 frame has a
-    detection with confidence in `band`, or (neighbours) the stage-1 result differs from an adjacent second."""
+    """Exactly the rule run.py applies (vindex.common.Sampling): stage 1 = k1 frames per second; a second is
+    unsure if a stage-1 frame has a detection with conf in `band`, or (neighbours) its stage-1 result differs
+    from the previous/next second's; unsure seconds are aggregated over the union of the k2 and k1 frames."""
+    sp = Sampling(k1, k2, band, neighbours)
     cand, used = {}, 0
     for vid, (per, n) in vids.items():
-        first, unsure = {}, set()
+        first, unsure, idx1 = {}, {}, {}
         for s, fl in per.items():
-            idx = pick_indices(len(fl), k1)
-            used += len(idx)
-            rs = [frame_result(fl[i]) for i in idx]
-            first[s] = (aggregate(rs), idx)
-            if any(band[0] <= p < band[1] for i in idx for c, p in fl[i]):
-                unsure.add(s)
-        if neighbours:
-            for s in first:
-                for t in (s - 1, s + 1):
-                    if t in first and first[t][0] != first[s][0]:
-                        unsure.add(s)
+            i1, _ = sp.stage_indices(len(fl))
+            idx1[s] = i1
+            used += len(i1)
+            first[s] = aggregate([frame_result(fl[i]) for i in i1])
+            unsure[s] = any(band[0] <= p < band[1] for i in i1 for c, p in fl[i])
         res = {}
         for s, fl in per.items():
-            if s in unsure:
-                idx = sorted(set(pick_indices(len(fl), k2)) | set(first[s][1]))
-                used += len(idx) - len(first[s][1])
-                res[s] = aggregate([frame_result(fl[i]) for i in idx])
+            if sp.needs_more(first.get(s - 1), first[s], first.get(s + 1), unsure[s]):
+                i1, i2 = sp.stage_indices(len(fl))
+                used += len(i2)
+                res[s] = aggregate([frame_result(fl[i]) for i in sorted(set(i1) | set(i2))])
             else:
-                res[s] = first[s][0]
+                res[s] = first[s]
         cand.update(to_lines(vid, res, n))
     return cand, used
 
@@ -110,8 +106,21 @@ def main():
     ap.add_argument("--dumps", required=True)
     ap.add_argument("--ks", default="1,2,3,4,5,7")
     ap.add_argument("--adaptive", action="store_true")
+    ap.add_argument("--write", nargs=2, metavar=("STRATEGY", "OUT"),
+                    help="write one strategy's lines, STRATEGY = 'uniform:K' or 'adaptive:K1:K2:LO:HI:NB'")
     a = ap.parse_args()
     vids = load_dumps(a.dumps)
+    if a.write:
+        f = a.write[0].split(":")
+        if f[0] == "uniform":
+            cand, _ = uniform(vids, int(f[1]))
+        else:
+            cand, _ = adaptive(vids, int(f[1]), int(f[2]), (float(f[3]), float(f[4])), bool(int(f[5])))
+        with open(a.write[1], "w", encoding="utf-8") as out:
+            for (v, s), (objs, people) in sorted(cand.items()):
+                out.write(json.dumps({"video": v, "second": s, "objects": [o for o in OBJECTS if o in objs],
+                                      "people": people}) + "\n")
+        return
     ref = reference(vids)
     total_frames = sum(len(fl) for per, _ in vids.values() for fl in per.values())
     total_seconds = sum(n for _, n in vids.values())

@@ -1,17 +1,21 @@
 """Decode worker process: video bytes -> letterboxed sample frames in shared memory slots.
 
 For each video:
- 1. demux only (no decoding) to get every frame's pts;
- 2. decode every frame (H.264 needs it), and for each second pick k evenly spaced frames out of that
-    second's frames (all frames if the second has <= k); only those are converted to BGR, rotated and
-    letterboxed straight into a free shared-memory slot;
- 3. if a second ends up with decoded frames but no sample (e.g. demux and decoder disagree), its last
-    frame is used, so every second that holds a frame gets at least one sample.
+ 1. demux only (no decoding) to get every frame's pts, and plan per second (vindex.common.Sampling):
+    stage-1 frames (k1 evenly spaced) and stage-2 candidates (the extra frames of k2 evenly spaced);
+ 2. decode every frame (H.264 needs it); a stage-1 frame is converted to BGR, rotated, letterboxed into a free
+    shared-memory slot and announced; stage-2 candidates are kept (as decoded frames) until the main process,
+    which has the stage-1 results, says "more" (send them) or "drop" for that second;
+ 3. if a second ends with decoded frames but no stage-1 sample (e.g. demux and decoder disagree), its last
+    frame is used as its stage-1 sample, so every second that holds a frame gets at least one sample.
 
-Messages to the main process (one queue):
+Messages to the main process (one queue, FIFO per worker):
   ("start", wid, vid)
-  ("f", wid, vid, second, slot, H, W, pts)     a letterboxed frame is in `slot`
+  ("f", wid, vid, second, slot, H, W, pts, stage)   a letterboxed frame is in `slot`
+  ("sec", wid, vid, second, n_stage1, has_candidates)  all stage-1 frames of `second` have been sent
+  ("s1done", wid, vid, n_seconds)                    decoding finished (stage-2 decisions may be pending)
   ("done", wid, vid, n_seconds, error_or_None)
+Control messages from the main process (per-worker queue): ("more"|"drop", vid, second).
 """
 import math
 import os
@@ -23,28 +27,29 @@ from fractions import Fraction
 import numpy as np
 
 SLOT_BYTES = 640 * 640 * 3
+CUR_BYTES = 512  # per-worker record of the video being processed (survives a hard crash)
 
 
-def _plan(pts_sorted, pts0, tb, k):
-    """Set of pts to sample: per second, pick_indices(n, k) among the frames of that second."""
-    from .common import pick_indices
-
+def _plan(pts_sorted, pts0, tb, sampling):
+    """pts -> stage (1 or 2) for the frames to sample."""
     per = {}
     for p in pts_sorted:
         if p < pts0:
             continue
         s = math.floor(Fraction(p - pts0) * tb)
         per.setdefault(s, []).append(p)
-    chosen = set()
+    plan = {}
     for s, lst in per.items():
-        for i in pick_indices(len(lst), k):
-            chosen.add(lst[i])
-    return chosen
+        i1, i2 = sampling.stage_indices(len(lst))
+        for i in i1:
+            plan[lst[i]] = 1
+        for i in i2:
+            plan.setdefault(lst[i], 2)
+    return plan
 
 
-def process_video(vid, data, k, get_slot, slots, send, wid, threads=1, deadline=None):
+def process_video(vid, data, sampling, get_slot, slots, send, wid, threads, ctrl):
     """Decode one video and send its sample frames. Returns (n_seconds, error)."""
-    import cv2  # noqa: F401
     from .detector import letterbox_into, letterbox_shape
     from .video import FrameClock, VideoError, open_container, packet_pts, sec, to_bgr
 
@@ -52,79 +57,119 @@ def process_video(vid, data, k, get_slot, slots, send, wid, threads=1, deadline=
         pts_sorted, _ = packet_pts(data)
     except VideoError as e:
         return 0, str(e)
-    except Exception as e:
-        pts_sorted = []  # demux failed; decode will tell us more
+    except Exception:
+        pts_sorted = []  # demux failed; decoding will tell us more
 
     try:
         c = open_container(data)
     except VideoError as e:
         return 0, str(e)
+    every = sampling.k1 <= 0
     n_seconds = 0
     err = None
+    hold = {}  # second -> [decoded frames] (stage-2 candidates awaiting a decision)
+    state = {"s": None, "n1": 0, "last": None}
+
+    def emit(fr, s, stage):
+        img = to_bgr(fr)
+        H, W = letterbox_shape(img.shape[0], img.shape[1])
+        slot = get_slot()
+        letterbox_into(img, slots[slot][: H * W * 3].reshape(H, W, 3))
+        send(("f", wid, vid, s, slot, H, W, fr.pts, stage))
+
+    def handle(msg):
+        kind, mvid, s = msg
+        if mvid != vid:
+            return  # stale decision for an earlier video
+        frames = hold.pop(s, None)
+        if kind == "more" and frames:
+            for fr in frames:
+                emit(fr, s, 2)
+
+    def poll():
+        while hold:
+            try:
+                handle(ctrl.get_nowait())
+            except queue.Empty:
+                return
+
+    def end_second():
+        s = state["s"]
+        if s is None:
+            return
+        if state["n1"] == 0 and state["last"] is not None:
+            fr = state["last"]
+            if s in hold and fr in hold[s]:
+                hold[s].remove(fr)
+                if not hold[s]:
+                    del hold[s]
+            emit(fr, s, 1)
+            state["n1"] = 1
+        send(("sec", wid, vid, s, state["n1"], s in hold))
+        state["s"] = None
+
     try:
         vs = c.streams.video[0]
         vs.thread_type = "AUTO"
         vs.thread_count = threads
         clock = FrameClock(vs)
-        chosen = None
-        cur_s, cur_sampled, cur_last = None, False, None
-
-        def emit(fr, s):
-            img = to_bgr(fr)
-            H, W = letterbox_shape(img.shape[0], img.shape[1])
-            slot = get_slot()
-            letterbox_into(img, slots[slot][: H * W * 3].reshape(H, W, 3))
-            send(("f", wid, vid, s, slot, H, W, fr.pts))
-
+        plan = None
         for fr in c.decode(vs):
             t = clock.time(fr)
             if t < 0:
                 continue
             s = sec(t)
-            if chosen is None:
-                chosen = _plan(pts_sorted, clock.pts0, clock.tb, k) if (pts_sorted and clock.pts0 is not None) else set()
-                use_all_fallback = not chosen
-            if s != cur_s:
-                if cur_s is not None and not cur_sampled and cur_last is not None:
-                    emit(cur_last, cur_s)
-                cur_s, cur_sampled, cur_last = s, False, None
-            if k <= 0 or fr.pts in chosen:  # k <= 0: every decoded frame (reference mode)
-                emit(fr, s)
-                cur_sampled = True
-                cur_last = None
+            if plan is None:
+                plan = _plan(pts_sorted, clock.pts0, clock.tb, sampling) if (pts_sorted and clock.pts0 is not None) else {}
+            if s != state["s"]:
+                end_second()
+                state.update(s=s, n1=0, last=None)
+            stage = 1 if every else plan.get(fr.pts)
+            if stage == 1:
+                emit(fr, s, 1)
+                state["n1"] += 1
+                state["last"] = None
             else:
-                cur_last = fr
+                if stage == 2:
+                    hold.setdefault(s, []).append(fr)
+                state["last"] = fr
             n_seconds = max(n_seconds, s + 1)
-            if deadline is not None and time.monotonic() > deadline:
-                raise TimeoutError("video took too long to decode")
-        if cur_s is not None and not cur_sampled and cur_last is not None:
-            emit(cur_last, cur_s)
+            if hold:
+                poll()
     except Exception as e:
         err = f"decoding failed part way: {type(e).__name__}: {e}"
+    try:
+        end_second()
+    except Exception as e:
+        err = err or f"decoding failed part way: {type(e).__name__}: {e}"
     finally:
         try:
             c.close()
         except Exception:
             pass
+    send(("s1done", wid, vid, n_seconds))
+    while hold:  # wait for the remaining stage-2 decisions
+        try:
+            handle(ctrl.get(timeout=600))
+        except queue.Empty:
+            err = err or "timed out waiting for sampling decisions"
+            break
     if n_seconds == 0 and err is None:
         err = "could not decode video (no frames)"
     return n_seconds, err
 
 
-CUR_BYTES = 512  # per-worker record of the video being processed (survives a hard crash)
-
-
 def set_current(cur, wid, vid):
     b = (vid or "").encode("utf-8")[: CUR_BYTES - 1]
-    cur[wid * CUR_BYTES: wid * CUR_BYTES + len(b) + 1] = b + b"\x00"
+    cur[wid * CUR_BYTES: wid * CUR_BYTES + len(b) + 1] = b + bytes(1)
 
 
 def get_current(cur, wid):
     raw = bytes(cur[wid * CUR_BYTES: (wid + 1) * CUR_BYTES])
-    return raw.split(b"\x00", 1)[0].decode("utf-8", "ignore") or None
+    return raw.split(bytes(1), 1)[0].decode("utf-8", "ignore") or None
 
 
-def worker_main(wid, task_q, msg_q, free_q, shm_name, n_slots, k, threads, max_seconds_per_video, cur):
+def worker_main(wid, task_q, msg_q, free_q, ctrl_q, shm_name, n_slots, sampling, threads, cur):
     """Entry point of a decode worker process."""
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     import cv2
@@ -133,9 +178,6 @@ def worker_main(wid, task_q, msg_q, free_q, shm_name, n_slots, k, threads, max_s
     cv2.setNumThreads(1)
     shm = shared_memory.SharedMemory(name=shm_name)
     slots = np.ndarray((n_slots, SLOT_BYTES), dtype=np.uint8, buffer=shm.buf)  # frame (H, W, 3) stored contiguously
-
-    def get_slot():
-        return free_q.get()
 
     try:
         while True:
@@ -150,8 +192,7 @@ def worker_main(wid, task_q, msg_q, free_q, shm_name, n_slots, k, threads, max_s
             if vid == os.environ.get("VINDEX_TEST_HANG"):  # test hook: simulate a hang
                 time.sleep(10 ** 6)
             try:
-                deadline = time.monotonic() + max_seconds_per_video if max_seconds_per_video else None
-                n, err = process_video(vid, data, k, get_slot, slots, msg_q.put, wid, threads, deadline)
+                n, err = process_video(vid, data, sampling, free_q.get, slots, msg_q.put, wid, threads, ctrl_q)
             except Exception as e:  # never let one video kill the worker
                 n, err = 0, f"internal error: {type(e).__name__}: {e} | {traceback.format_exc(limit=2)[-300:]}"
             del data, task

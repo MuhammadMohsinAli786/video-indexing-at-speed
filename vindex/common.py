@@ -28,6 +28,51 @@ def pick_indices(n, k):
     return sorted({min(n - 1, int((j + 0.5) * n / k)) for j in range(k)})
 
 
+class Sampling:
+    """Frame sampling plan.
+
+    Stage 1 analyses k1 evenly spaced frames per second. A second is "unsure" if a stage-1 frame has a
+    detection of the five classes with confidence in [band_lo, band_hi), or (neighbours=True) its stage-1
+    result differs from the previous or next second's. Unsure seconds get the k2 evenly spaced frames
+    (union with the stage-1 ones), and are aggregated over all of them. k1 == k2 means plain uniform sampling;
+    k1 = k2 = 0 means every frame.
+    """
+
+    def __init__(self, k1=1, k2=3, band=(0.25, 0.6), neighbours=True):
+        self.k1, self.k2 = k1, max(k1, k2) if k1 > 0 else 0
+        self.band = band
+        self.neighbours = neighbours
+
+    @property
+    def adaptive(self):
+        return self.k2 > self.k1 > 0
+
+    def stage_indices(self, n):
+        """(stage-1 indices, extra stage-2 indices) among the n frames of one second."""
+        s1 = pick_indices(n, self.k1)
+        if not self.adaptive:
+            return s1, []
+        s2 = sorted(set(pick_indices(n, self.k2)) - set(s1))
+        return s1, s2
+
+    def needs_more(self, prev, cur, nxt, cur_unsure):
+        """prev/cur/nxt: stage-1 aggregate results (objects, people) of seconds s-1, s, s+1 (None if absent)."""
+        if cur_unsure:
+            return True
+        if self.neighbours:
+            for other in (prev, nxt):
+                if other is not None and other != cur:
+                    return True
+        return False
+
+    def describe(self):
+        if self.k1 <= 0:
+            return "every frame"
+        if not self.adaptive:
+            return f"uniform k={self.k1}"
+        return f"adaptive {self.k1}->{self.k2} band={self.band} neighbours={self.neighbours}"
+
+
 def aggregate(frames):
     """Combine per-frame results of one second the way the grader does.
 
