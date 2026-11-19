@@ -1,0 +1,25 @@
+# data
+finevideo/
+data/
+*.parquet
+*.mp4
+# model weights / engines / caches
+*.pt
+*.engine
+*.onnx
+*.torchscript
+weights/
+.cache/
+__pycache__/
+*.pyc
+# run outputs (results.jsonl.gz is committed explicitly)
+out/
+runs/
+parts/
+*.jsonl
+!tests/**/*.jsonl
+*.log
+.venv/
+venv/
+.vscode/
+.idea/
