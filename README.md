@@ -135,5 +135,5 @@ Details, the full strategy grid, profiling and dropped approaches: `docs/measure
   detector (`detector.py`), per-second rules (`common.py`)
 * `tools/` — reference, scoring, simulation, equivalence check, validation-set picker
 * `tests/` — edge-case generator, offline guard
-* `val/` — validation video lists and reference results
+* `val/` — validation video lists, every-frame reference results, per-frame reference detections (`ref_frames_*`, to replay sampling strategies), validation outputs
 * `docs/measurements.md` — measurement log; `HARDWARE.md`; `WRITEUP.md`; `ai_chats/`

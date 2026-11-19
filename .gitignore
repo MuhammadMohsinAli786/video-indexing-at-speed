@@ -26,4 +26,4 @@ venv/
 
 # validation artefacts we do commit
 !val/*.jsonl
-val/ref_frames/
+# val/ref_frames_*/ (per-frame detections of the references) are committed on purpose: small, no video data
