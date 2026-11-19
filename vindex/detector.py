@@ -70,6 +70,7 @@ class Detector:
         if not os.path.isfile(weights):
             raise FileNotFoundError(f"model weights not found: {weights} (run the preparation command first)")
         self.torch = torch
+        self.weights = weights
         self.device = torch.device(device)
         if half is None:  # FP16 only where the GPU has fast FP16 (Volta+); Pascal FP16 is slow
             half = self.device.type == "cuda" and torch.cuda.get_device_capability(self.device)[0] >= 7

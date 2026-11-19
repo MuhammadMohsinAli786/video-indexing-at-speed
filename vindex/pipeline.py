@@ -161,6 +161,10 @@ class GPURunner:
         self.jobs = queue.Queue()
         self.results = queue.Queue()
         self.busy_seconds = 0.0
+        self.oom_events = 0
+        self.cpu_fallbacks = 0
+        self.cpu_det = None
+        self.cpu_lock = threading.Lock()
         self.threads = [threading.Thread(target=self._loop, args=(d, torch.cuda.Stream(det.device) if cuda else None),
                                          daemon=True) for d in dets]
         for t in self.threads:
@@ -170,21 +174,46 @@ class GPURunner:
         for _ in self.threads:
             self.jobs.put(None)
 
-    def _detect_safe(self, det, x, band):
-        """det.detect; on CUDA out-of-memory free the cache and run the batch in two halves (recursively)."""
-        torch = self.torch
+    def _free_gpu(self):
         try:
-            return det.detect(x, band=band, return_dets=self.dump)
-        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
-            if "out of memory" not in str(e).lower() or x.shape[0] == 1:
-                raise
-        torch.cuda.empty_cache()
-        h = x.shape[0] // 2
-        a = self._detect_safe(det, x[:h], band)
-        b = self._detect_safe(det, x[h:], band)
-        cat = lambda u, v: None if u is None else torch.cat((u, v))  # noqa: E731
-        return (cat(a[0], b[0]), cat(a[1], b[1]), cat(a[2], b[2]),
-                None if a[3] is None else a[3] + b[3])
+            self.torch.cuda.synchronize()
+        except Exception:
+            pass
+        self.torch.cuda.empty_cache()
+
+    def _detect_safe(self, det, x, band):
+        """det.detect with out-of-memory recovery, results on the CPU.
+
+        On CUDA out-of-memory: free the cache and run the batch in two halves (recursively); a single image is
+        retried 3 times (2 s apart) and finally run on the CPU, so a transient memory shortage never costs a video.
+        """
+        torch = self.torch
+        tries = 3 if x.shape[0] == 1 else 1
+        for attempt in range(tries):
+            try:
+                r = det.detect(x, band=band, return_dets=self.dump)
+                return tuple(None if t is None else t.cpu() for t in r[:3]) + (r[3],)
+            except RuntimeError as e:  # torch.OutOfMemoryError and torch.AcceleratorError are RuntimeErrors
+                if "out of memory" not in str(e).lower():
+                    raise
+                self.oom_events += 1
+                self._free_gpu()
+                if x.shape[0] == 1 and attempt < tries - 1:
+                    time.sleep(2)
+        if x.shape[0] > 1:
+            h = x.shape[0] // 2
+            a = self._detect_safe(det, x[:h], band)
+            b = self._detect_safe(det, x[h:], band)
+            cat = lambda u, v: None if u is None else torch.cat((u, v))  # noqa: E731
+            return (cat(a[0], b[0]), cat(a[1], b[1]), cat(a[2], b[2]),
+                    None if a[3] is None else a[3] + b[3])
+        with self.cpu_lock:  # last resort for this one image: the CPU
+            if self.cpu_det is None:
+                from .detector import Detector
+                self.cpu_det = Detector(det.weights, "cpu", half=False)
+            self.cpu_fallbacks += 1
+            r = self.cpu_det.detect(x.cpu(), band=band, return_dets=self.dump)
+            return tuple(None if t is None else t.cpu() for t in r[:3]) + (r[3],)
 
     def _loop(self, det, stream):
         import contextlib
@@ -230,7 +259,8 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
     if gpu_threads is None:  # a second inference thread hides NMS/copy gaps; needs memory for two batches
         gpu_threads = 2 if gpu_mem >= 8 * 2 ** 30 else 1
     if batch is None:
-        batch = auto_batch(det, 64 if gpu_mem >= 12 * 2 ** 30 else 16)
+        batch = auto_batch(det, 64 if gpu_mem >= 20 * 2 ** 30 else 32 if gpu_mem >= 10 * 2 ** 30
+                           else 16 if gpu_mem >= 6 * 2 ** 30 else 8)
     cpu = os.cpu_count() or 4
     if workers is None:
         workers = max(1, min(cpu - 1, 48))
@@ -463,7 +493,8 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
             last_report = time.monotonic()
             el = time.time() - t_start
             log(f"[{el:7.0f}s] videos={n_videos} frames={n_frames} ({n_frames / el:.1f}/s, stage2={n_stage2}) "
-                f"gpu_busy={gpu.busy_seconds:.0f}s lines={writer.n} errors={n_err}")
+                f"gpu_busy={gpu.busy_seconds:.0f}s lines={writer.n} errors={n_err} oom={gpu.oom_events} "
+                f"cpu_fallback={gpu.cpu_fallbacks}")
 
     while pending:
         flush_largest()
@@ -487,24 +518,31 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
     el = time.time() - t_start
     res = {"videos": n_videos, "frames": n_frames, "stage2_frames": n_stage2, "lines": writer.n, "errors": n_err,
            "seconds": round(el, 1),
-           "gpu_busy_seconds": round(gpu.busy_seconds, 1)}
+           "gpu_busy_seconds": round(gpu.busy_seconds, 1), "oom_events": gpu.oom_events,
+           "cpu_fallback_frames": gpu.cpu_fallbacks}
     log(f"done: {res}")
     return res
 
 
 def auto_batch(det, start=64):
-    """Largest batch (<= start, power of two) whose 640x640 forward fits in free GPU memory."""
+    """Largest batch (<= start, halving) whose worst-case 640x640 forward fits; the probe's memory is released
+    afterwards (a cached probe on a 4 GB Windows GPU caused out-of-memory errors later, see measurements)."""
     import torch
 
     if det.device.type != "cuda":
         return 4
     b = start
-    while b > 1:
-        try:
-            det.detect(torch.zeros((b, 640, 640, 3), dtype=torch.uint8))
-            torch.cuda.synchronize()
-            return b
-        except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
-            b //= 2
-    return 1
+    try:
+        while b > 1:
+            try:
+                det.detect(torch.zeros((b, 640, 640, 3), dtype=torch.uint8))
+                torch.cuda.synchronize()
+                break
+            except RuntimeError as e:
+                if "out of memory" not in str(e).lower():
+                    raise
+                torch.cuda.empty_cache()
+                b //= 2
+    finally:
+        torch.cuda.empty_cache()
+    return max(b, 1)
