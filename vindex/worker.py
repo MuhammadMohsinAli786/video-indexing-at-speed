@@ -28,6 +28,7 @@ import numpy as np
 
 SLOT_BYTES = 640 * 640 * 3
 CUR_BYTES = 512  # per-worker record of the video being processed (survives a hard crash)
+DECISION_WAIT_CAP = float(os.environ.get("VINDEX_DECISION_WAIT_CAP", "3600"))  # seconds, then analyse all candidates
 
 
 def _plan(pts_sorted, pts0, tb, sampling):
@@ -148,12 +149,20 @@ def process_video(vid, data, sampling, get_slot, slots, send, wid, threads, ctrl
         except Exception:
             pass
     send(("s1done", wid, vid, n_seconds))
-    while hold:  # wait for the remaining stage-2 decisions
+    # Wait for the remaining stage-2 decisions. They need this video's last stage-1 results from the GPU, which
+    # can take long on a slow or busy GPU: keep the main process' watchdog informed, and never fail the video
+    # for it. After a very long wait (main process stuck) the candidates are simply analysed too (still exact
+    # sampling rules, just more frames).
+    waited = 0.0
+    while hold:
         try:
-            handle(ctrl.get(timeout=600))
+            handle(ctrl.get(timeout=30))
         except queue.Empty:
-            err = err or "timed out waiting for sampling decisions"
-            break
+            waited += 30
+            send(("alive", wid, vid))
+            if waited >= DECISION_WAIT_CAP:
+                for s in sorted(hold):
+                    handle(("more", vid, s))
     if n_seconds == 0 and err is None:
         err = "could not decode video (no frames)"
     return n_seconds, err
@@ -179,6 +188,14 @@ def worker_main(wid, task_q, msg_q, free_q, ctrl_q, shm_name, n_slots, sampling,
     shm = shared_memory.SharedMemory(name=shm_name)
     slots = np.ndarray((n_slots, SLOT_BYTES), dtype=np.uint8, buffer=shm.buf)  # frame (H, W, 3) stored contiguously
 
+    def get_slot():
+        """A free shared-memory slot; while all are in use (slow GPU) keep the watchdog informed."""
+        while True:
+            try:
+                return free_q.get(timeout=30)
+            except queue.Empty:
+                msg_q.put(("alive", wid, None))
+
     try:
         while True:
             task = task_q.get()
@@ -192,7 +209,7 @@ def worker_main(wid, task_q, msg_q, free_q, ctrl_q, shm_name, n_slots, sampling,
             if vid == os.environ.get("VINDEX_TEST_HANG"):  # test hook: simulate a hang
                 time.sleep(10 ** 6)
             try:
-                n, err = process_video(vid, data, sampling, free_q.get, slots, msg_q.put, wid, threads, ctrl_q)
+                n, err = process_video(vid, data, sampling, get_slot, slots, msg_q.put, wid, threads, ctrl_q)
             except Exception as e:  # never let one video kill the worker
                 n, err = 0, f"internal error: {type(e).__name__}: {e} | {traceback.format_exc(limit=2)[-300:]}"
             del data, task

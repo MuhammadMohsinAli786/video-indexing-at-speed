@@ -19,8 +19,10 @@ def main():
     ap.add_argument("--input", required=True)
     ap.add_argument("--done", nargs="+", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--redo-errors", metavar="TEXT",
+                    help="also list videos whose error line contains TEXT (e.g. a bug fixed since that part)")
     a = ap.parse_args()
-    secs, errs = {}, set()
+    secs, errs, redo = {}, set(), set()
     for p in a.done:
         if not os.path.exists(p):
             continue
@@ -32,6 +34,8 @@ def main():
                     continue  # torn last line
                 if "error" in d:
                     errs.add(d["video"])
+                    if a.redo_errors and a.redo_errors in d["error"]:
+                        redo.add(d["video"])
                 else:
                     secs.setdefault(d["video"], set()).add(d["second"])
     complete = set(errs) | {v for v, s in secs.items() if s == set(range(max(s) + 1))}
@@ -40,6 +44,7 @@ def main():
         complete = set()
         for p in done_lists:
             complete |= {l.strip() for l in open(p, encoding="utf-8") if l.strip()}
+    complete -= redo
     todo = []
     for f in sorted(os.listdir(a.input)):
         if not f.endswith(".parquet"):

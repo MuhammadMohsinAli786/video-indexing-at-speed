@@ -23,7 +23,8 @@ import numpy as np
 from .common import Sampling, aggregate
 from .worker import CUR_BYTES, SLOT_BYTES, get_current, set_current, worker_main
 
-HANG_SECONDS = float(os.environ.get("VINDEX_HANG_SECONDS", "600"))  # silent worker (with free slots) = hung
+HANG_SECONDS = float(os.environ.get("VINDEX_HANG_SECONDS", "600"))  # a worker silent this long is hung
+MAX_PENDING_WAIT = 0.5  # seconds a partial batch may wait for more frames of its shape
 
 
 def list_parquets(folder):
@@ -372,6 +373,7 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
     def submit(shape):
         nonlocal jobs_out
         items = pending.pop(shape)
+        pending_since.pop(shape, None)
         H, W = shape
         n, fb = len(items), H * W * 3
         bi = gpu.free.get()  # blocks only while all pinned buffers are queued on the GPU
@@ -419,6 +421,8 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
         if pending:
             submit(max(pending, key=lambda s: len(pending[s])))
 
+    pending_since = {}  # shape -> time its oldest pending frame arrived
+    last_watch = 0.0
     last_report = time.monotonic()
     while True:
         while not err_lines.empty():
@@ -439,6 +443,8 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
                     continue
                 inflight[vid] += 1
                 n_stage2 += stage == 2
+                if (H, W) not in pending:
+                    pending_since[(H, W)] = time.monotonic()
                 pending[(H, W)].append((slot, vid, s, pts, stage))
                 if len(pending[(H, W)]) >= batch:
                     submit((H, W))
@@ -462,22 +468,32 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
                     done_info[vid] = (n_sec, err)
                     if inflight[vid] == 0:
                         finish(vid)
-        else:
-            if pending and gpu.jobs.qsize() == 0 and gpu.free.qsize() > 0:
-                flush_largest()  # GPU idle and no new frames: run what we have
-            now = time.monotonic()
+        now = time.monotonic()
+        if m is None and pending and gpu.jobs.qsize() == 0 and gpu.free.qsize() > 0:
+            flush_largest()  # GPU idle and no new frames: run what we have
+        # A partial batch never waits long, even while other shapes keep the queue busy: a rare letterbox shape
+        # (e.g. 480x360 or 202x360 video) would otherwise hold its last frames, and with them the video's
+        # sampling decisions, indefinitely.
+        for shape in [sh for sh, t0 in list(pending_since.items()) if now - t0 > MAX_PENDING_WAIT]:
+            if shape in pending:
+                submit(shape)
+        if now - last_watch > 0.5:  # watchdog, also under constant message traffic
+            last_watch = now
             for wid, p in list(procs.items()):
-                if p.exitcode == 0 and wid not in current and get_current(cur, wid) is None:
-                    procs.pop(wid)  # finished normally (got its None)
+                if p.exitcode == 0:
+                    procs.pop(wid)  # normal exit after its None; its last messages may still be queued
                     continue
                 dead = p.exitcode is not None
-                hung = wid in current and now - last_msg[wid] > HANG_SECONDS and free_q.qsize() > 0
+                hung = wid in current and now - last_msg[wid] > HANG_SECONDS  # waiting workers send heartbeats
                 if not (dead or hung):
                     continue
                 if hung:
                     p.kill()
                 p.join(timeout=5)
-                vid = current.pop(wid, None) or get_current(cur, wid)
+                # the shared-memory record is authoritative (queued messages can make `current` stale)
+                vid = get_current(cur, wid)
+                if current.get(wid) == vid:
+                    current.pop(wid, None)
                 if vid is not None and vid not in done_info:
                     done_info[vid] = (0, "worker crashed or hung while decoding this video")
                     if inflight[vid] == 0:
@@ -487,8 +503,8 @@ def run(input_dir, output, weights, sampling=None, workers=None, batch=None, n_s
                 if not rt.is_alive():
                     task_q.put(None)  # make sure the replacement can always exit
                 last_msg[wid] = time.monotonic()
-            if not procs and not pending and not rt.is_alive():
-                break
+        if m is None and not procs and not pending and not rt.is_alive():
+            break
         if time.monotonic() - last_report > 60:
             last_report = time.monotonic()
             el = time.time() - t_start
