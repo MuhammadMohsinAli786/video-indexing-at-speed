@@ -87,3 +87,13 @@ Real `run.py` output with the final default settings (adaptive 1->3, band [0.25,
 - Same videos, same GPU: every frame 4255.6 s vs final 287.3 s = 14.8x faster.
 - Held-out simulation of other strategies (`val/sim_heldout_grid.txt`): uniform k=1 F1 0.9770 / exact 93.54% / within-1 99.25%; uniform k=3 0.9907 / 96.48% / 99.86%; uniform k=5 0.9929 / 96.59% / 99.92%.
 - FP16 vs FP32 changed 6 of ~5980 sampled frames' stage-2 decisions and no metric beyond the 4th digit (on Pascal, where FP16 is not faster: 243.6 s vs 287.3 s wall here).
+
+## Tuning set, real run.py output (final settings, FP32, P2000, 2026-11-19)
+
+- 35 videos, 5395 s of video: 9799 frames analysed (1.82/s), 432.3 s wall, GPU busy 407.0 s. Score vs the every-frame reference: F1 0.9879 (P 0.9906 / R 0.9853), people exact 95.44%, within-1 99.85% (= the simulator's prediction).
+- Note: the first tuning reference process died with CUDA out-of-memory after 22 videos (I was running test jobs on the same 4 GB GPU at the same time); its last buffered output lines were lost, while its per-frame dumps were complete. `val/ref_tune.jsonl` was therefore rebuilt from the dumps (`tools/simulate.py --write uniform:0`, 5395 lines); the lines that had been written agreed with the rebuilt file 100%. Since then the GPU threads catch out-of-memory and retry the batch in halves, and no other GPU job runs next to a long run.
+
+## Full 50-file run (local, P2000)
+
+- Started 2026-11-19 18:19:33 PKT by `D:\vi-tools\after_refs.sh` after the held-out gate passed; command:
+  `python run.py --input finevideo/data --output part1.jsonl --done-file part1.jsonl.done --fp32` (defaults otherwise: adaptive 1->3, batch 16, 11 decode workers).
