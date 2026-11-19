@@ -74,7 +74,7 @@ class Detector:
         if half is None:  # FP16 only where the GPU has fast FP16 (Volta+); Pascal FP16 is slow
             half = self.device.type == "cuda" and torch.cuda.get_device_capability(self.device)[0] >= 7
         self.half = bool(half)
-        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.benchmark = False  # autotuning costs seconds per new batch shape; no steady-state gain measured
         self.model = AutoBackend(weights, device=self.device, fp16=self.half, fuse=True, verbose=verbose)
         self.model.eval()
         self.cls_ids = torch.tensor(CLASS_IDS, device=self.device)
