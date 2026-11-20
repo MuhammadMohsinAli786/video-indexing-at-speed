@@ -135,3 +135,20 @@ from `run.py`, per-stage CPU costs from `tools/profile_decode.py`.
 - Run time: part1 371 s + part2 11,711 s + part3 22,614.9 s = **34,697 s (9 h 38 min)** on the P2000; GPU busy 34,267 s (99%). Frames analysed: 788,482 (incl. redone videos) of 12,981,615 (~6.1%).
 - Consistency check inside the full results: the 23 held-out videos score F1 0.9905 / exact 96.15% / within-1 99.86% vs the every-frame reference and their lines are identical to the held-out validation run; the 35 tuning videos score 0.9879 / 95.44% / 99.85%.
 - Versions on the full 50 files (P2000): v0 every frame with the Ultralytics API ~360 h (estimate), v1 every frame through the pipeline ~150 h (estimate: 12.98 M frames / 24 per s), final 9 h 38 min (measured).
+
+## Extra test on an unseen, out-of-dataset video (2026-11-20, not used for any tuning)
+
+- Video: built with `tools/make_unseen_video.py` from two archive.org clips (not in FineVideo; not committed because of their licences):
+  "Shenzhen Electronics Markets - Back Alley Walking Tour" (identifier youtube-HOZUBk4ETO0, CC BY-SA 4.0, 1080p, seconds 60-300) +
+  "Valmont Dog Park" (identifier Valmont_Dog_Park, CC BY-NC-ND 3.0, 720p, whole 56.2 s); re-encoded to one H.264 1280x720 video, 8830 frames, 296.1 s, wrapped as `unseen.parquet` row 0.
+- Reference: `tools/reference.py` (Ultralytics predict on every frame): 297 seconds, 460.4 s processing (19.2 frames/s), 581 s wall.
+- Final `run.py --fp32` (defaults): 843 frames analysed (2.84 per second of video; 546 stage-2), 100.7 s, 103 s wall, 0 errors.
+- Score (`tools/score.py --per-video`): objects F1 0.9798 (P 0.9764 / R 0.9833), people exact **66.67%** (below the brief's 85%), within-1 97.98%.
+- Objects present in the reference (seconds): person 258, car 114, dog 47, cell phone 1, laptop 0 (laptop not exercised; cell phone only once). Per object F1: person 1.000, car 0.965, dog 0.935, cell phone 0.400 (1 tp, 3 fp), laptop no positives.
+- Why exact is low: the market walk is a dense crowd: the every-frame median is >= 6 people in 209 of 297 seconds (10+ in 61). On those seconds the default got the exact count in 124/209, vs 39/39 for 0 people. Sampling the same video more densely (simulated on its every-frame detections): uniform k=1 / 3 / 5 / 9 -> exact 50.5% / 67.0% / 74.8% / 81.1%, within-1 89.2% / 98.0% / 99.0% / 99.3%. Exact median counts of crowds need nearly every frame.
+- How common crowds are in FineVideo: seconds with a reference median >= 6 people are 1.5% of the held-out set and 5.6% of the tuning set (default exact on them 81% / 80%); in the 50-file results 3.1% of seconds have >= 6 people and 79.5% have 0-1 people (exact ~98-99% at 0-1 in validation).
+- No setting was changed after this test.
+
+## requirements.txt resolution check (2026-11-20)
+
+- `pip install --dry-run --ignore-installed --report --only-binary=:all: --platform manylinux_2_35..manylinux1_x86_64 --python-version 3.11 -r requirements.txt` (metadata only, no wheels downloaded): resolves, 41 packages, including torch 2.14.1+cu126, torchvision 0.29.1+cu126, ultralytics 8.4.215, opencv-python 5.1.0.95, av 18.1.0, pyarrow 26.0.1, numpy 2.4.6. First attempt with only `--platform manylinux_2_28_x86_64` failed for matplotlib 3.11.2 (its wheel is tagged manylinux2014/2_17; pip does not widen an explicit platform tag); with all compatible tags it resolves. Limitation: pip evaluates markers for the machine it runs on (Windows), so torch's Linux-only CUDA dependencies (nvidia-*-cu12, triton) are not in this list; on Linux torch's own metadata pins them (the Colab install covered that path).

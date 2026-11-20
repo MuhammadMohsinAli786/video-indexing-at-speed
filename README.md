@@ -132,6 +132,12 @@ Settings were tuned on 35 videos from files 02–09 (1.5 h) and then **confirmed
 | held-out (real `run.py` output, FP16, 23 videos) | 0.9905 | 96.12% | 99.86% |
 | pass thresholds | ≥ 0.95 | ≥ 85% | ≥ 95% |
 
+Extra check on an unseen, non-FineVideo video (a 296 s mix of a crowded street-market walk and a dog park, built
+with `tools/make_unseen_video.py`, not used for tuning): objects F1 0.9798, people within 1 97.98%, but people
+exact only **66.7%**: in dense crowds (≥ 6 people in 70% of its seconds) an exact per-second median needs nearly
+every frame (uniform 9 frames/s still gives only 81%). FineVideo has few such seconds (≈ 3%), which is why the
+validation above holds; see `docs/measurements.md`.
+
 Details, the full strategy grid, profiling and dropped approaches: `docs/measurements.md`.
 
 Reproduce (needs the FineVideo files in `finevideo/data` and a GPU):
