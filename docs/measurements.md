@@ -140,6 +140,12 @@ from `run.py`, per-stage CPU costs from `tools/profile_decode.py`.
 
 - `pip install --dry-run --ignore-installed --report --only-binary=:all: --platform manylinux_2_35..manylinux1_x86_64 --python-version 3.11 -r requirements.txt` (metadata only, no wheels downloaded): resolves, 41 packages, including torch 2.14.1+cu126, torchvision 0.29.1+cu126, ultralytics 8.4.215, opencv-python 5.1.0.95, av 18.1.0, pyarrow 26.0.1, numpy 2.4.6. First attempt with only `--platform manylinux_2_28_x86_64` failed for matplotlib 3.11.2 (its wheel is tagged manylinux2014/2_17; pip does not widen an explicit platform tag); with all compatible tags it resolves. Limitation: pip evaluates markers for the machine it runs on (Windows), so torch's Linux-only CUDA dependencies (nvidia-*-cu12, triton) are not in this list; on Linux torch's own metadata pins them (the Colab install covered that path).
 
+## Linux check of the exact command on a fresh clone (Google Colab, 2026-11-20)
+
+- Fresh `git clone` of this repo on Colab (Ubuntu, Python 3.13.16, Tesla T4 15 GB, driver 580.82.07, Intel Xeon @ 2.00 GHz, 2 vCPUs, 12 GB RAM): `pip install -r requirements.txt` OK, `python prepare.py` OK (weights downloaded, FP16 self-test identical to Ultralytics on both images).
+- One FineVideo file (`train-00045-of-01357.parquet`, 33 videos, 0.47 GB) downloaded, then the brief's command with defaults: `python run.py --input /content/finevideo/data --output f45.jsonl` (FP16 chosen automatically): rc 0, 33 videos, 13,751 frames analysed (5,610 stage-2), 8,141 lines, 0 errors, 0 OOM, 0 CPU fallback, 492.1 s (8 min 14 s wall; decode-bound on 2 vCPUs, ~28 frames/s).
+- Against this repo's `results.jsonl.gz` for the same file (P2000, FP32): 8,141 lines each, 8,117 identical; `tools/score.py`: objects F1 0.9996, people exact 99.72%, within-1 100.00% (the small difference is FP16 vs FP32).
+
 ---
 
 ## Separate test: another recording, outside FineVideo (2026-11-20)

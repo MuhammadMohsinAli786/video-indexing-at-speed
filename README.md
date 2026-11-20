@@ -160,8 +160,9 @@ python tests/test_rules.py && python tests/test_oom_recovery.py                 
   the GPU's memory). FP16 accuracy was validated on the held-out set (same metrics as FP32, table above), but
   FP16 speed was not measured on a 4090.
 * Linux: `pip install -r requirements.txt` and `python prepare.py` were run on a Google Colab VM (Ubuntu, Python
-  3.13, Tesla T4): install OK and the FP16 self-test on the T4 matched Ultralytics. The full run itself was not
-  done there. All pins also have cp311 manylinux x86_64 wheels.
+  3.13, Tesla T4): install OK and the FP16 self-test on the T4 matched Ultralytics. On a fresh clone there,
+  `python run.py --input ... --output ...` processed one full FineVideo file (33 videos) with 0 errors in 8 min 14 s,
+  and its output agreed with this repo's results for that file (F1 0.9996, exact 99.72%; FP16 vs FP32). All pins also have cp311 manylinux x86_64 wheels.
 * No TensorRT/ONNX engine is used: it could not be validated on the Pascal dev GPU, so the timed run uses
   PyTorch (Ultralytics AutoBackend) only.
 
