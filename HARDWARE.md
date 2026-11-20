@@ -1,6 +1,7 @@
 # Hardware of the full 50-file run
 
-The results in `results.jsonl.gz` (all 50 files, `train-00000…00049-of-01357.parquet`) were produced on a laptop:
+The results in `results.jsonl.gz` (all 50 files, `train-00000…00049-of-01357.parquet`: 1650 videos, 128.03 h of
+video, 12.98 M frames) were produced on one machine, a laptop:
 
 | | |
 |---|---|
@@ -10,22 +11,31 @@ The results in `results.jsonl.gz` (all 50 files, `train-00000…00049-of-01357.p
 | RAM | 16 GB DDR4-2667 |
 | Disk | Samsung MZVLB512HAJQ NVMe SSD (input Parquet files and output on it) |
 | OS | Windows 11 Pro (10.0.26300), Python 3.11.9, PyTorch 2.14.1+cu126 |
-| Inference | FP32 (Pascal has slow FP16), batch 8 (chosen automatically for a 4 GB GPU), 11 decode processes |
+| Inference | FP32 (Pascal has slow FP16), batch 8 (chosen automatically for a 4 GB GPU) |
 | Settings | `run.py` defaults (adaptive sampling 1→3 frames per second), as submitted |
+| Decode processes | 11 (parts 1–2), 8 (part 3, to keep the laptop cooler) |
 
 ## Full run time (start to finish)
 
-_To be filled in when the run finishes._ The run was interrupted once (the agent session that had started it
-restarted at ~18:39 PKT and its child processes died) and resumed for the remaining videos with the done-file
-mechanism (`tools/resume_list.py`, `tools/merge_parts.py`); the time below is the sum of the two parts' wall
-times, not counting the gap between them. An earlier attempt at 18:19 was stopped after ~5 minutes because of a
-GPU out-of-memory bug (fixed; see `docs/measurements.md`) and is not counted; its output was discarded.
+**Total: _tbd_ (sum of the three parts' wall times below).**
 
-| part | start (PKT) | end (PKT) | wall | videos |
-|---|---|---|---|---|
-| part 1 | 2026-11-19 18:32:39 | ~18:39 (interrupted) | _tbd_ | 9 |
-| part 2 | 2026-11-19 18:41:55 | _tbd_ | _tbd_ | 1641 |
-| **total** | | | _tbd_ | 1650 |
+The run did not go through in one piece, so it was done in three parts with the resume mechanism
+(`run.py --done-file`, `tools/resume_list.py`, `tools/merge_parts.py`). Each part only processed videos that
+earlier parts had not finished; the merge keeps one complete result per video.
 
-Note: this GPU is far slower than the grader's RTX 4090 (about 22 YOLO11l images/s at 640×384 in FP32), so the
-run time here is dominated by GPU inference. See `docs/measurements.md` for the breakdown.
+| part | start (PKT) | end (PKT) | wall | videos finished | why it ended |
+|---|---|---|---|---|---|
+| part 1 | 2026-11-19 18:32:39 | ~18:39 | 371 s (last progress line) | 9 | the agent session that had started it restarted, which killed it |
+| part 2 | 2026-11-19 18:41:55 | ~21:57 | ~11,711 s (last progress line) | 524 | the laptop shut down (probably heat; GPU at 84 °C) |
+| part 3 | 2026-11-20 12:09:00 | _tbd_ | _tbd_ | _tbd_ (1129 to do) | finished |
+| **total** | | | **_tbd_** | **1650** | |
+
+Notes:
+- Part 3 also re-ran 12 videos that part 2 had finished with the error "timed out waiting for sampling decisions"
+  (a pipeline bug fixed between the parts, see `docs/measurements.md`), so part 3's time includes those 12 videos
+  a second time. Videos that were in progress when parts 1 and 2 were killed were redone from the start in the
+  next part.
+- Not counted: an attempt started at 18:19 on 19 Nov and stopped after ~5 minutes because of a GPU out-of-memory
+  bug (fixed); its output was discarded.
+- This GPU is far slower than the grader's RTX 4090 (about 22–24 YOLO11l images/s at 640×384 in FP32), so the run
+  time here is dominated by GPU inference (GPU busy ~98% of the wall time). See `docs/measurements.md`.

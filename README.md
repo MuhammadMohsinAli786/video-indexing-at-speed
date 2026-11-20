@@ -26,10 +26,11 @@ batched inference against Ultralytics' own `predict` on two sample images. Nothi
 ## Run (timed, no internet needed)
 
 ```bash
-python3.11 run.py --input <folder of .parquet files> --output results.jsonl
+python run.py --input <folder of .parquet files> --output results.jsonl     # python = Python 3.11
 ```
 
-Options (defaults are chosen automatically and are what was validated):
+No options are needed; progress goes to stderr (one line per minute) and the output file is written as videos
+finish. Options (defaults are chosen automatically and are what was validated):
 
 | option | default | meaning |
 |---|---|---|
@@ -38,7 +39,8 @@ Options (defaults are chosen automatically and are what was validated):
 | `--band LO HI` | `0.25 0.6` | a stage-1 detection with confidence in [LO, HI) flags its second as unsure |
 | `--neighbours` | `objects` | flag a second whose stage-1 objects (`objects`) or objects and people (`all`) differ from the previous/next second's (`off` to disable) |
 | `--workers` | CPU threads − 1 | decode processes |
-| `--batch` | auto (largest of 64/32/… that fits) | GPU batch size |
+| `--batch` | auto from GPU memory: 8 (< 6 GB), 16, 32, 64 (≥ 20 GB), halved if a 640×640 test batch does not fit | GPU batch size |
+| `--done-file` | none | append each finished video id (for resuming an interrupted run, see `tools/resume_list.py`, `tools/merge_parts.py`) |
 | `--fp16 / --fp32` | FP16 on Volta or newer, FP32 on older GPUs | inference precision |
 
 ## Output
@@ -53,7 +55,14 @@ Options (defaults are chosen automatically and are what was validated):
 
 Second *s* holds the frames with timestamp *s* ≤ t < *s*+1, measured from the first decoded frame
 (pts × time_base, exact fractions, so variable frame rate is handled). Every second up to the one holding the
-last frame gets a line; seconds without frames get `[]` / `0`.
+last frame gets a line; seconds without frames get `[]` / `0`. Object names are exactly `person`, `car`, `dog`,
+`laptop`, `cell phone`, in that order. Line order across videos is the order in which videos finish.
+
+Error lines: a video that cannot be processed gets one `{"video": ..., "error": ...}` line (e.g. empty `mp4`
+value, not a video, no video stream, no decodable frames); a video that fails part way keeps the lines of the
+seconds decoded so far plus one error line. A Parquet file that cannot be read at all gets one error line with
+the file name as `video` (no row number, since its rows are unknown); a file without an `mp4` column gets one
+error line per row.
 
 ## How it works
 
@@ -67,10 +76,13 @@ parquet reader thread ──► N decode processes ──► shared-memory slots
 1. **Read**: a thread streams the `mp4` column of each Parquet file row by row (only that column is read).
 2. **Decode** (one process per CPU thread): demux once to learn every frame's timestamp, then decode all frames
    (H.264 needs that) but convert to BGR, rotate (display matrix, like `ffmpeg`/OpenCV autorotate) and
-   letterbox **only the k sampled frames per second**: k evenly spaced frames out of that second's frames
-   (all of them if the second has ≤ k frames).
+   letterbox **only the sampled frames** (see *Sampling* below): the middle frame of each second, and for
+   "unsure" seconds the frames at 1/6 and 5/6 of the second, which the worker holds until the main process
+   decides from the stage-1 results.
 3. **Infer**: frames are grouped by letterbox shape and run in batches through YOLO11l (Ultralytics
-   AutoBackend, fused, FP16 on Volta+) on a dedicated GPU thread while the main thread prepares the next batch.
+   AutoBackend, fused, FP16 on Volta+) on one or two inference threads (two on GPUs with ≥ 8 GB, each with its
+   own CUDA stream and model copy) while the main thread prepares the next batch. A partial batch waits at most
+   0.5 s. On CUDA out-of-memory a batch is split and retried (one image falls back to the CPU as a last resort).
    Letterbox (minimum rectangle, stride 32, pad 114, `INTER_LINEAR`), BGR→RGB, /255 and NMS (best class of 80,
    conf ≥ 0.4, class-aware IoU 0.7, max 300) reproduce Ultralytics' `predict` exactly; this was checked
    frame by frame (`tools/check_equivalence.py`, `prepare.py`).
@@ -118,6 +130,18 @@ Settings were tuned on 35 videos from files 02–09 (1.5 h) and then **confirmed
 | pass thresholds | ≥ 0.95 | ≥ 85% | ≥ 95% |
 
 Details, the full strategy grid, profiling and dropped approaches: `docs/measurements.md`.
+
+Reproduce (needs the FineVideo files in `finevideo/data` and a GPU):
+
+```bash
+python run.py --input finevideo/data --videos val/heldout_videos.txt --k1 0 --output ref.jsonl     # every frame
+python run.py --input finevideo/data --videos val/heldout_videos.txt --output cand.jsonl            # final settings
+python tools/score.py --ref ref.jsonl --cand cand.jsonl                                             # the 3 metrics
+python tools/simulate.py --dumps val/ref_frames_tune --ks 1,3,5 --adaptive                          # strategy grid (CPU only)
+python tests/test_rules.py && python tests/test_oom_recovery.py                                     # unit tests (CPU only)
+```
+
+`--videos` (a list of `file.parquet:row` ids) and `--dump-dets` are development options, hidden from `--help`.
 
 ## What was tested where
 

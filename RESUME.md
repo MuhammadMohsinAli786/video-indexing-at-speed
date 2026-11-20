@@ -3,34 +3,33 @@
 Environment: venv `D:\vi-tools\venv` (Python 3.11.9, torch 2.14.1+cu126). Data: `D:\video-indexing\finevideo\data`
 (50 files, sizes verified). Weights: `D:\video-indexing\weights\yolo11l.pt`. Run parts: `D:\vi-tools\fullrun\`.
 
-## Full 50-file run: state (2026-11-19 evening)
+## Full 50-file run: parts
 
 | part | how started | start (PKT) | end | notes |
 |---|---|---|---|---|
-| (aborted) | after_refs.sh | 18:19:33 | ~18:25 | CUDA OOM bug, discarded, kept in `fullrun/aborted_oom/` |
-| part1 | `D:\vi-tools\fullrun_go.sh part1` | 18:32:39 | ~18:39 (killed, 371 s logged) | Claude Code restart killed it; 9 videos in `part1.jsonl.done` |
-| part2 | `D:\vi-tools\fullrun_part2.cmd`, detached via WMI | 18:41:55 | see `part2.times` | resumes the other 1641 videos (`todo2.txt`) |
+| (aborted) | after_refs.sh | 11-19 18:19:33 | ~18:25 | CUDA OOM bug, discarded, kept in `fullrun/aborted_oom/` |
+| part1 | `D:\vi-tools\fullrun_go.sh part1` | 11-19 18:32:39 | ~18:39 (371 s logged) | agent restart killed it; 9 videos in `.done` |
+| part2 | `D:\vi-tools\fullrun_part2.cmd`, detached (WMI) | 11-19 18:41:55 | ~21:57 (11,711 s logged) | laptop shut down (heat); 524 in `.done`, 12 with the timeout error |
+| part3 | `D:\vi-tools\fullrun_part3.cmd`, detached (WMI), 8 workers | 11-20 12:09:00 | see `part3.times` | fixed code; 1129 videos (`todo3.txt`), incl. the 12 re-runs |
 
 Each part writes `partN.jsonl`, `partN.jsonl.done` (videos fully written), `partN.log`, `partN.times`.
+If a part is interrupted, start the next one DETACHED (not as a child of a Claude shell) with
+`Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='cmd.exe /c <launcher>.cmd'}`,
+running `tools/resume_list.py --done part1.jsonl part2.jsonl ... --redo-errors "timed out waiting for sampling decisions"`.
 
-## If part2 is interrupted too
-
-Launch the next part DETACHED (not as a child of a Claude shell), e.g. a `fullrun_part3.cmd` like part2's with
-`--done D:/vi-tools/fullrun/part1.jsonl D:/vi-tools/fullrun/part2.jsonl` for `resume_list.py`, started via
-`Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='cmd.exe /c D:\vi-tools\fullrun_part3.cmd'}`.
-
-## When the last part has finished
+## When part3.times shows END
 
 ```bash
-cd /d/video-indexing
-/d/vi-tools/venv/Scripts/python.exe tools/merge_parts.py --input finevideo/data \
-  --parts /d/vi-tools/fullrun/part1.jsonl /d/vi-tools/fullrun/part2.jsonl /d/vi-tools/fullrun/part3.jsonl --out results.jsonl.gz
+/d/vi-tools/finalize.sh
 ```
 
-`merge_parts.py` takes a video from a part only if it is listed in that part's `.done` file, so part1's partial
-last video is dropped automatically, and later parts win (part3 replaces part2's timeout error lines).
-Expect 1650 videos written, 0 missing, and no "timed out waiting" error lines.
+It merges parts 1–3 into `results.jsonl.gz` (`tools/merge_parts.py`: a video is taken from a part only if it is in
+that part's `.done`; later parts win, so part3 replaces part2's timeout error lines), then checks:
+expect **1650 videos, 461,757 second-lines, ~0 error lines, no "timed out waiting"**; the held-out and tuning
+videos inside the full run must score like the validation (held-out F1 0.9905 / exact 96.15% / within-1 99.86%,
+tuning 0.9879 / 95.44% / 99.85%) and the held-out lines should equal `val/heldout_final_fp32.jsonl`.
+It also prints each part's start/end and last progress line.
 
-Then: full-run time in `HARDWARE.md` = part1 wall (371 s + shutdown) + part2 wall (from `part2.times`/log),
-excluding the gap and the aborted attempt; README final numbers; token scan; push; delete this file.
-`ai_chats/` is added by the main session; WRITEUP.md stays for the candidate.
+Then: fill the `_tbd_` cells in `HARDWARE.md` (total = part1 371 s + part2 ~11,711 s + part3 wall); add the final
+numbers to `docs/measurements.md` and README; `git add -f results.jsonl.gz`; delete this file; token scan; push.
+`ai_chats/`: copy the agent transcript (tokens replaced by `[REMOVED]`) when told. WRITEUP.md stays for the candidate.
