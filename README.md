@@ -30,7 +30,13 @@ python run.py --input <folder of .parquet files> --output results.jsonl     # py
 ```
 
 No options are needed; progress goes to stderr (one line per minute) and the output file is written as videos
-finish. Options (defaults are chosen automatically and are what was validated):
+finish.
+
+**Docker:** decoded frames go from the decode processes to the GPU through shared memory (`/dev/shm`), about
+1.2 MB per frame slot; with batch 64 on a 24 GB GPU that is ~470 MB. Docker's default `/dev/shm` is only 64 MB, so
+start the container with `--shm-size=2g` (or `--ipc=host`). A normal Linux host needs nothing extra.
+
+Options (defaults are chosen automatically and are what was validated):
 
 | option | default | meaning |
 |---|---|---|
