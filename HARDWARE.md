@@ -17,7 +17,11 @@ video, 12.98 M frames) were produced on one machine, a laptop:
 
 ## Full run time (start to finish)
 
-**Total: _tbd_ (sum of the three parts' wall times below).**
+Frames analysed by the model over the three parts: 788,482 (6,302 + 261,163 + 521,017, including the frames of
+videos that were redone), of 12.98 M frames in the 50 files (~6%). GPU busy 34,267 s of 34,697 s (99%).
+Result: 1650 videos, 461,757 per-second lines, 0 error lines.
+
+**Total: 34,697 s = 9 h 38 min** (sum of the three parts' run times below; gaps between parts not counted).
 
 The run did not go through in one piece, so it was done in three parts with the resume mechanism
 (`run.py --done-file`, `tools/resume_list.py`, `tools/merge_parts.py`). Each part only processed videos that
@@ -27,8 +31,8 @@ earlier parts had not finished; the merge keeps one complete result per video.
 |---|---|---|---|---|---|
 | part 1 | 2026-11-19 18:32:39 | ~18:39 | 371 s (last progress line) | 9 | the agent session that had started it restarted, which killed it |
 | part 2 | 2026-11-19 18:41:55 | ~21:57 | ~11,711 s (last progress line) | 524 | the laptop shut down (probably heat; GPU at 84 °C) |
-| part 3 | 2026-11-20 12:09:00 | _tbd_ | _tbd_ | _tbd_ (1129 to do) | finished |
-| **total** | | | **_tbd_** | **1650** | |
+| part 3 | 2026-11-20 12:09:00 | 2026-11-20 18:26:11 | 22,615 s (run.py; 22,631 s launcher wall) | 1129 | finished (rc 0) |
+| **total** | | | **34,697 s (9 h 38 min)** | **1650** | |
 
 Notes:
 - Part 3 also re-ran 12 videos that part 2 had finished with the error "timed out waiting for sampling decisions"

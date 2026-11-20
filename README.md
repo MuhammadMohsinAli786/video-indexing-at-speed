@@ -46,7 +46,10 @@ finish. Options (defaults are chosen automatically and are what was validated):
 ## Output
 
 `results.jsonl.gz` in this repo holds the results for the first 50 FineVideo files
-(`train-00000…00049-of-01357.parquet`). Format, one line per second of each video:
+(`train-00000…00049-of-01357.parquet`): 1650 videos, 461,757 per-second lines, 0 error lines, produced with the
+default settings in 9 h 38 min on a Quadro P2000 laptop GPU (`HARDWARE.md`). The 23 held-out validation videos
+inside it score F1 0.9905 / people exact 96.15% / within-1 99.86% against the every-frame reference.
+Format, one line per second of each video:
 
 ```json
 {"video": "train-00003-of-01357.parquet:4", "second": 12, "objects": ["person", "laptop"], "people": 2}

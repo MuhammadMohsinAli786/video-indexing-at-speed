@@ -127,3 +127,11 @@ from `run.py`, per-stage CPU costs from `tools/profile_decode.py`.
 - 2026-11-20 12:09:00 PKT part3 started (detached), with 8 decode workers instead of 11 to keep the laptop cooler (decode is not the bottleneck: GPU-bound). `tools/resume_list.py --redo-errors "timed out waiting for sampling decisions"`: 521 videos complete, 1129 to do (incl. the 12 re-runs). At 16,561 s: 819 videos, 378,542 frames (22.9/s), GPU busy 16,379 s (99%), 0 errors, 0 OOM.
 - Expected merge result (from the dataset survey: lines per video = floor(last frame time) + 1, which matches all 23 held-out reference videos exactly): 1650 videos, 461,757 second-lines, and ~0 error lines (the survey found no unreadable video).
 - 2026-11-20 requirements.txt: also pinned Ultralytics' own dependencies to the tested versions (matplotlib 3.11.2, polars 2.1.0 + polars-runtime-32 2.1.0, psutil 7.2.2, ultralytics-thop 2.2.5, nvidia-ml-py 13.615.71, ultralytics-platform 0.1.117, httpx 0.28.1); all have Linux cp311/py3 wheels and their declared requirements are consistent with the pins (checked from the wheels' metadata).
+
+## Full 50-file run: final (2026-11-20)
+
+- part3 finished 2026-11-20 18:26:11 PKT, rc 0: 1129 videos, 521,017 frames analysed (210,706 stage-2), 310,311 lines, 0 errors, 22,614.9 s, GPU busy 22,431.2 s (99%), 0 OOM, 0 CPU fallbacks.
+- Merge (`tools/merge_parts.py`, parts 1-3): 1650 of 1650 videos, 0 missing, 461,757 per-second lines (= expected from the survey), 0 error lines -> `results.jsonl.gz`.
+- Run time: part1 371 s + part2 11,711 s + part3 22,614.9 s = **34,697 s (9 h 38 min)** on the P2000; GPU busy 34,267 s (99%). Frames analysed: 788,482 (incl. redone videos) of 12,981,615 (~6.1%).
+- Consistency check inside the full results: the 23 held-out videos score F1 0.9905 / exact 96.15% / within-1 99.86% vs the every-frame reference and their lines are identical to the held-out validation run; the 35 tuning videos score 0.9879 / 95.44% / 99.85%.
+- Versions on the full 50 files (P2000): v0 every frame with the Ultralytics API ~360 h (estimate), v1 every frame through the pipeline ~150 h (estimate: 12.98 M frames / 24 per s), final 9 h 38 min (measured).
